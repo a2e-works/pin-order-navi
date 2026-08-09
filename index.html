@@ -30,7 +30,7 @@
     font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Yu Gothic",sans-serif;
     overflow:hidden;
   }
-  #app{position:relative;height:100vh;width:100vw;}
+  #app{position:relative;height:100vh;height:100dvh;width:100vw;}
   .screen{
     position:absolute; inset:0;
     display:none;
@@ -89,16 +89,19 @@
   #editorBody{padding:16px; display:flex; flex-direction:column; gap:16px;}
   .pin-row{
     background:var(--surface); border:1px solid var(--border); border-radius:12px;
-    padding:11px 12px; display:flex; align-items:center; gap:10px;
+    padding:12px; display:flex; flex-direction:column; gap:9px;
   }
+  .pin-row-top{display:flex; align-items:center; gap:10px;}
+  .pin-row-bottom{display:flex; align-items:center; gap:8px;}
   .pin-num{
     width:26px; height:26px; border-radius:50%; background:var(--accent-dim); color:var(--accent);
     font-size:12px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;
   }
-  .pin-row .pname{flex:1; font-size:14px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .pin-row .pname{flex:1; font-size:14px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer; text-decoration:underline dotted var(--text-dim);}
+  .pin-actions{display:flex; gap:6px; margin-left:auto;}
   .pin-row .mini{
-    width:30px; height:30px; border-radius:8px; background:var(--surface-2); border:1px solid var(--border);
-    color:var(--text-dim); display:flex; align-items:center; justify-content:center; font-size:14px; cursor:pointer;
+    width:36px; height:36px; border-radius:9px; background:var(--surface-2); border:1px solid var(--border);
+    color:var(--text-dim); display:flex; align-items:center; justify-content:center; font-size:15px; cursor:pointer; flex-shrink:0;
   }
   .search-results{display:flex; flex-direction:column; gap:6px; margin-top:8px;}
   .search-item{
@@ -106,7 +109,7 @@
     font-size:13px; cursor:pointer; line-height:1.5;
   }
   .search-item:active{background:var(--accent-dim);}
-  #miniMap{height:220px; border-radius:12px; overflow:hidden; border:1px solid var(--border); display:none;}
+  #miniMap{height:min(58vh, 480px); min-height:320px; border-radius:12px; overflow:hidden; border:1px solid var(--border); display:none;}
   .tabbtns{display:grid; grid-template-columns:1fr 1fr; gap:8px;}
   .tabbtns .btn{padding:10px 6px; font-size:12.5px;}
   .tabbtns .btn.off{background:var(--surface-2); color:var(--text-dim);}
@@ -308,10 +311,9 @@
             </div>
           </div>
         </div>
+
+        <button class="btn block" style="margin-top:4px;" onclick="saveRoute()">このルートを保存</button>
       </div>
-    </div>
-    <div class="fab-wrap">
-      <button class="btn block" onclick="saveRoute()">このルートを保存</button>
     </div>
   </div>
 
@@ -569,20 +571,43 @@ function renderPinList(){
     const isWaypoint = p.type === 'waypoint';
     const row = document.createElement('div');
     row.className = 'pin-row' + (isWaypoint ? ' is-waypoint' : '');
-    row.innerHTML = `
-      <div class="pin-num">${i+1}</div>
-      <div class="pname">${escapeHtml(p.name)}</div>
-    `;
+
+    const top = document.createElement('div');
+    top.className = 'pin-row-top';
+    const numEl = document.createElement('div');
+    numEl.className = 'pin-num';
+    numEl.textContent = i+1;
+    const nameEl = document.createElement('div');
+    nameEl.className = 'pname';
+    nameEl.textContent = p.name;
+    nameEl.title = 'タップして名前を変更';
+    nameEl.onclick = ()=>{
+      const newName = prompt('ピンの名前を変更', p.name);
+      if(newName && newName.trim()){ p.name = newName.trim(); renderPinList(); refreshMiniMapMarkers(); }
+    };
+    top.appendChild(numEl);
+    top.appendChild(nameEl);
+
+    const bottom = document.createElement('div');
+    bottom.className = 'pin-row-bottom';
     const typeBtn = document.createElement('div');
     typeBtn.className = 'pin-type-toggle' + (isWaypoint ? '' : ' dest');
     typeBtn.textContent = isWaypoint ? '通過点' : '📍行きたい';
     typeBtn.title = 'タップで切り替え';
     typeBtn.onclick = ()=>{ p.type = isWaypoint ? 'destination' : 'waypoint'; renderPinList(); refreshMiniMapMarkers(); };
-    const upBtn = mkMini('↑', ()=>{ if(i>0){ [draftPins[i-1],draftPins[i]]=[draftPins[i],draftPins[i-1]]; renderPinList(); }});
-    const downBtn = mkMini('↓', ()=>{ if(i<draftPins.length-1){ [draftPins[i+1],draftPins[i]]=[draftPins[i],draftPins[i+1]]; renderPinList(); }});
+    bottom.appendChild(typeBtn);
+
+    const actions = document.createElement('div');
+    actions.className = 'pin-actions';
+    const upBtn = mkMini('↑', ()=>{ if(i>0){ [draftPins[i-1],draftPins[i]]=[draftPins[i],draftPins[i-1]]; renderPinList(); refreshMiniMapMarkers(); }});
+    const downBtn = mkMini('↓', ()=>{ if(i<draftPins.length-1){ [draftPins[i+1],draftPins[i]]=[draftPins[i],draftPins[i+1]]; renderPinList(); refreshMiniMapMarkers(); }});
+    const copyBtn = mkMini('⧉', ()=>{ draftPins.splice(i+1, 0, {...p, name: p.name + 'のコピー'}); renderPinList(); refreshMiniMapMarkers(); });
     const delBtn = mkMini('×', ()=>{ draftPins.splice(i,1); renderPinList(); refreshMiniMapMarkers(); });
-    row.appendChild(typeBtn);
-    row.appendChild(upBtn); row.appendChild(downBtn); row.appendChild(delBtn);
+    actions.appendChild(upBtn); actions.appendChild(downBtn); actions.appendChild(copyBtn); actions.appendChild(delBtn);
+    bottom.appendChild(actions);
+
+    row.appendChild(top);
+    row.appendChild(bottom);
     wrap.appendChild(row);
   });
 }
