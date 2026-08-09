@@ -6,6 +6,7 @@
 <title>ピン順ナビ</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
   :root{
     --bg: #0f1115;
@@ -106,9 +107,50 @@
   }
   .search-item:active{background:var(--accent-dim);}
   #miniMap{height:220px; border-radius:12px; overflow:hidden; border:1px solid var(--border); display:none;}
-  .tabbtns{display:flex; gap:8px;}
-  .tabbtns .btn{flex:1; padding:10px; font-size:13px;}
+  .tabbtns{display:grid; grid-template-columns:1fr 1fr; gap:8px;}
+  .tabbtns .btn{padding:10px 6px; font-size:12.5px;}
   .tabbtns .btn.off{background:var(--surface-2); color:var(--text-dim);}
+
+  .pin-type-toggle{
+    flex-shrink:0; display:flex; align-items:center; gap:4px; padding:5px 8px; border-radius:8px;
+    background:var(--surface-2); border:1px solid var(--border); font-size:10px; color:var(--text-dim); cursor:pointer;
+    white-space:nowrap;
+  }
+  .pin-type-toggle.dest{color:var(--accent); border-color:var(--accent-dim);}
+  .pin-row.is-waypoint{opacity:.75;}
+
+  .import-help{font-size:12px; color:var(--text-dim); line-height:1.7; margin-bottom:10px;}
+  .import-help a{color:var(--accent);}
+  input[type=file]{
+    width:100%; background:var(--surface-2); border:1px solid var(--border); color:var(--text-dim);
+    padding:10px; border-radius:10px; font-size:13px;
+  }
+  .gmaps-file-item{
+    background:var(--surface-2); border:1px solid var(--border); border-radius:10px; padding:10px 12px;
+    font-size:13px; cursor:pointer; margin-top:6px; display:flex; align-items:center; gap:8px;
+  }
+  .gmaps-file-item:active{background:var(--accent-dim);}
+  .gbtn{
+    display:flex; align-items:center; justify-content:center; gap:10px;
+    background:#fff; color:#3c4043; border:1px solid #dadce0; border-radius:10px;
+    padding:11px; font-size:14px; font-weight:600; cursor:pointer; width:100%;
+  }
+  .gbtn:active{background:#f1f3f4;}
+  .gbtn .gicon{width:18px; height:18px; flex-shrink:0;}
+
+  /* ---------- settings ---------- */
+  #settingsBody{padding:16px; display:flex; flex-direction:column; gap:16px;}
+  .settings-note{
+    background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:14px;
+    font-size:12.5px; color:var(--text-dim); line-height:1.8;
+  }
+  .settings-note ol{margin:6px 0 0; padding-left:18px;}
+  .settings-note a{color:var(--accent);}
+  .status-pill{
+    display:inline-flex; align-items:center; gap:6px; font-size:12px; padding:5px 10px; border-radius:20px;
+    background:var(--surface-2); border:1px solid var(--border); color:var(--text-dim);
+  }
+  .status-pill.ok{color:var(--accent); border-color:var(--accent-dim);}
 
   /* ---------- nav screen ---------- */
   #navScreen{background:var(--bg);}
@@ -158,6 +200,11 @@
   }
   .pin-marker span{transform:rotate(45deg); font-size:11px; font-weight:800; color:#06231a;}
   .pin-marker.reached{background:#4a5262;}
+  .waypoint-marker{
+    width:14px; height:14px; border-radius:50%; background:var(--surface); border:3px solid var(--warn);
+    box-shadow:0 2px 6px rgba(0,0,0,.4);
+  }
+  .waypoint-marker.reached{border-color:#4a5262;}
 
   .toast{
     position:absolute; left:50%; bottom:150px; transform:translateX(-50%);
@@ -188,6 +235,7 @@
         <h1>ピン順ナビ</h1>
         <div class="sub">保存したルートを選んで開始</div>
       </div>
+      <div class="iconbtn" title="設定" onclick="openSettings()">⚙</div>
     </div>
     <div class="scroll">
       <div id="routeList"></div>
@@ -222,6 +270,8 @@
           <div class="tabbtns">
             <button class="btn" id="tabSearchBtn" onclick="switchAddTab('search')">住所で追加</button>
             <button class="btn off" id="tabMapBtn" onclick="switchAddTab('map')">地図で追加</button>
+            <button class="btn off" id="tabCsvBtn" onclick="switchAddTab('csv')">Takeout CSV</button>
+            <button class="btn off" id="tabGmapsBtn" onclick="switchAddTab('gmaps')">マイマップ連携</button>
           </div>
 
           <div id="searchTab" style="margin-top:10px;">
@@ -234,11 +284,66 @@
             <div class="sub" style="margin-bottom:8px;">地図をタップしてピンを追加</div>
             <div id="miniMap" style="display:block;"></div>
           </div>
+
+          <div id="csvTab" style="margin-top:10px; display:none;">
+            <div class="import-help">
+              Googleテイクアウト（<a href="https://takeout.google.com" target="_blank" rel="noopener">takeout.google.com</a>）で「保存済み地点（Maps）」を選んでエクスポートし、対象リストのCSVファイルをここで読み込みます。追加されたピンはすべて「行きたい場所」として追加されます（後で経由点に切り替え可能）。
+            </div>
+            <input type="file" id="csvFileInput" accept=".csv" onchange="handleCsvFile(event)">
+            <div id="csvStatus" class="sub" style="margin-top:8px;"></div>
+          </div>
+
+          <div id="gmapsTab" style="margin-top:10px; display:none;">
+            <div id="gmapsNoKey" style="display:none;">
+              <div class="import-help">Google連携を使うには、先に設定画面でGoogle OAuthクライアントIDを登録してください。</div>
+              <button class="btn secondary block" onclick="goHome(); openSettings();">設定画面を開く</button>
+            </div>
+            <div id="gmapsHasKey" style="display:none;">
+              <button class="gbtn" onclick="googleSignIn()">
+                <svg class="gicon" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.6 32.9 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34.6 6.1 29.6 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.7-.4-4z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.6 16 19 13 24 13c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34.6 6.1 29.6 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.4 26.7 36 24 36c-5.2 0-9.5-3.3-11.1-7.9l-6.5 5C9.6 39.6 16.3 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.4-2.4 4.4-4.4 5.8l6.2 5.2C40.7 36.6 44 30.8 44 24c0-1.3-.1-2.7-.4-3.5z"/></svg>
+                Googleでログイン
+              </button>
+              <div id="gmapsStatus" class="sub" style="margin-top:10px;"></div>
+              <div id="gmapsFileList"></div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
     <div class="fab-wrap">
       <button class="btn block" onclick="saveRoute()">このルートを保存</button>
+    </div>
+  </div>
+
+  <!-- ============ SETTINGS ============ -->
+  <div class="screen" id="settingsScreen">
+    <div class="topbar">
+      <div class="iconbtn" onclick="goHome()">←</div>
+      <div style="flex:1;">
+        <h1>設定</h1>
+        <div class="sub">Googleマイマップ連携の設定</div>
+      </div>
+    </div>
+    <div class="scroll">
+      <div id="settingsBody">
+        <div class="settings-note">
+          Googleマイマップ（mymaps.google.com）に保存したピンを取り込むには、Google Cloud ConsoleでOAuthクライアントIDを1つ作成し、下に貼り付けてください。クライアントIDは公開情報で、これ自体は秘密情報ではありません。
+          <ol>
+            <li><a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">Google Cloud Console（認証情報）</a>を開き、プロジェクトを作成</li>
+            <li>「Google Drive API」を有効化</li>
+            <li>OAuth同意画面を設定（テストユーザーとしてご自身のGoogleアカウントを追加）</li>
+            <li>認証情報 → OAuthクライアントID → アプリケーションの種類「ウェブアプリケーション」</li>
+            <li>「承認済みのJavaScript生成元」に、このアプリを公開しているURL（例：<code id="pagesUrlHint">https://あなたのユーザー名.github.io/リポジトリ名/</code>）を追加</li>
+            <li>発行された「クライアントID」（xxxxx.apps.googleusercontent.com の形式）を下に貼り付けて保存</li>
+          </ol>
+        </div>
+        <div>
+          <label class="field-label">Google OAuthクライアントID</label>
+          <input type="text" id="googleClientIdInput" placeholder="xxxxxxxx.apps.googleusercontent.com">
+        </div>
+        <div id="settingsStatus"></div>
+        <button class="btn block" onclick="saveSettings()">保存</button>
+      </div>
     </div>
   </div>
 
@@ -307,7 +412,7 @@ let miniMapObj = null, miniMapMarkers = [];
 
 let navMap = null, navRouteLayer = null, navUserMarker = null, navPinMarkers = [];
 let navSteps = [];       // flattened steps across all legs
-let navLegPinNames = []; // pin name for each leg index
+let navLegPins = [];     // {name, type} for each leg index (type: 'destination' | 'waypoint')
 let navCurrentStepIndex = 0;
 let navWatchId = null;
 let navAnnounced = {};   // stepIndex -> {far:bool, near:bool}
@@ -315,6 +420,11 @@ let navActiveRoute = null;
 let voicesReady = false;
 let lastPosUpdateTime = 0;
 const RESYNC_GAP_MS = 15000; // 15秒以上更新が止まっていたら通話等で離れていたとみなす
+let navReachedLegs = new Set();
+
+let googleClientId = '';
+let googleAccessToken = null;
+let googleTokenClient = null;
 
 /* ===================== utils ===================== */
 function uid(){ return 'r'+Date.now()+Math.random().toString(36).slice(2,8); }
@@ -455,15 +565,23 @@ function renderPinList(){
   }
   wrap.innerHTML = '';
   draftPins.forEach((p, i)=>{
+    if(!p.type) p.type = 'destination'; // 既存データの後方互換
+    const isWaypoint = p.type === 'waypoint';
     const row = document.createElement('div');
-    row.className = 'pin-row';
+    row.className = 'pin-row' + (isWaypoint ? ' is-waypoint' : '');
     row.innerHTML = `
       <div class="pin-num">${i+1}</div>
       <div class="pname">${escapeHtml(p.name)}</div>
     `;
+    const typeBtn = document.createElement('div');
+    typeBtn.className = 'pin-type-toggle' + (isWaypoint ? '' : ' dest');
+    typeBtn.textContent = isWaypoint ? '通過点' : '📍行きたい';
+    typeBtn.title = 'タップで切り替え';
+    typeBtn.onclick = ()=>{ p.type = isWaypoint ? 'destination' : 'waypoint'; renderPinList(); refreshMiniMapMarkers(); };
     const upBtn = mkMini('↑', ()=>{ if(i>0){ [draftPins[i-1],draftPins[i]]=[draftPins[i],draftPins[i-1]]; renderPinList(); }});
     const downBtn = mkMini('↓', ()=>{ if(i<draftPins.length-1){ [draftPins[i+1],draftPins[i]]=[draftPins[i],draftPins[i+1]]; renderPinList(); }});
     const delBtn = mkMini('×', ()=>{ draftPins.splice(i,1); renderPinList(); refreshMiniMapMarkers(); });
+    row.appendChild(typeBtn);
     row.appendChild(upBtn); row.appendChild(downBtn); row.appendChild(delBtn);
     wrap.appendChild(row);
   });
@@ -479,9 +597,199 @@ function switchAddTab(tab){
   addTab = tab;
   document.getElementById('tabSearchBtn').className = 'btn' + (tab==='search' ? '' : ' off');
   document.getElementById('tabMapBtn').className = 'btn' + (tab==='map' ? '' : ' off');
+  document.getElementById('tabCsvBtn').className = 'btn' + (tab==='csv' ? '' : ' off');
+  document.getElementById('tabGmapsBtn').className = 'btn' + (tab==='gmaps' ? '' : ' off');
   document.getElementById('searchTab').style.display = tab==='search' ? 'block' : 'none';
   document.getElementById('mapTab').style.display = tab==='map' ? 'block' : 'none';
+  document.getElementById('csvTab').style.display = tab==='csv' ? 'block' : 'none';
+  document.getElementById('gmapsTab').style.display = tab==='gmaps' ? 'block' : 'none';
   if(tab==='map') initMiniMap();
+  if(tab==='gmaps') initGmapsTab();
+}
+
+/* ===================== CSV (Google Takeout) import ===================== */
+function parseCsvLine(line){
+  // シンプルなCSVパーサー（ダブルクォート対応）
+  const out = []; let cur=''; let inQ=false;
+  for(let i=0;i<line.length;i++){
+    const c = line[i];
+    if(inQ){
+      if(c === '"'){
+        if(line[i+1] === '"'){ cur+='"'; i++; } else { inQ=false; }
+      }else cur+=c;
+    }else{
+      if(c === '"') inQ=true;
+      else if(c === ','){ out.push(cur); cur=''; }
+      else cur+=c;
+    }
+  }
+  out.push(cur);
+  return out;
+}
+function extractLatLngFromUrl(url){
+  if(!url) return null;
+  let m = url.match(/query=(-?\d+\.\d+),(-?\d+\.\d+)/);
+  if(m) return {lat:parseFloat(m[1]), lng:parseFloat(m[2])};
+  m = url.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+  if(m) return {lat:parseFloat(m[1]), lng:parseFloat(m[2])};
+  m = url.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
+  if(m) return {lat:parseFloat(m[1]), lng:parseFloat(m[2])};
+  return null;
+}
+function handleCsvFile(evt){
+  const file = evt.target.files[0];
+  const statusEl = document.getElementById('csvStatus');
+  if(!file) return;
+  statusEl.textContent = '読み込み中…';
+  const reader = new FileReader();
+  reader.onload = ()=>{
+    try{
+      const text = reader.result;
+      const lines = text.split(/\r?\n/).filter(l=>l.trim().length>0);
+      if(lines.length < 2){ statusEl.textContent = 'データが見つかりませんでした。'; return; }
+      const header = parseCsvLine(lines[0]).map(h=>h.trim().toLowerCase());
+      const titleIdx = header.findIndex(h=>h==='title');
+      const urlIdx = header.findIndex(h=>h==='url' || h==='comment' || h.includes('url'));
+      let added = 0, skipped = 0;
+      for(let i=1;i<lines.length;i++){
+        const cols = parseCsvLine(lines[i]);
+        const title = (titleIdx>=0 ? cols[titleIdx] : cols[0]) || '(名称不明)';
+        const urlCol = urlIdx>=0 ? cols[urlIdx] : cols.find(c=>c.includes('http'));
+        const coords = extractLatLngFromUrl(urlCol);
+        if(!coords){ skipped++; continue; }
+        draftPins.push({name: title.trim(), lat: coords.lat, lng: coords.lng, type:'destination'});
+        added++;
+      }
+      renderPinList();
+      refreshMiniMapMarkers();
+      statusEl.textContent = `${added}件のピンを追加しました${skipped>0 ? '（座標を特定できず'+skipped+'件をスキップ）' : ''}`;
+    }catch(e){
+      statusEl.textContent = 'CSVの読み込みに失敗しました。Googleテイクアウトから書き出したそのままのCSVをお使いください。';
+    }
+  };
+  reader.readAsText(file, 'UTF-8');
+}
+
+/* ===================== Google My Maps (Drive API) import ===================== */
+async function loadGoogleClientId(){
+  try{
+    const r = await window.storage.get('settings:googleClientId', false);
+    googleClientId = (r && r.value) ? r.value : '';
+  }catch(e){ googleClientId = ''; }
+}
+function initGmapsTab(){
+  document.getElementById('gmapsNoKey').style.display = googleClientId ? 'none' : 'block';
+  document.getElementById('gmapsHasKey').style.display = googleClientId ? 'block' : 'none';
+}
+function googleSignIn(){
+  const statusEl = document.getElementById('gmapsStatus');
+  if(!window.google || !google.accounts || !google.accounts.oauth2){
+    statusEl.textContent = 'Googleログイン用スクリプトの読み込みに失敗しました。通信環境をご確認のうえページを再読み込みしてください。';
+    return;
+  }
+  if(!googleTokenClient){
+    googleTokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: googleClientId,
+      scope: 'https://www.googleapis.com/auth/drive.readonly',
+      callback: (resp)=>{
+        if(resp.error){
+          statusEl.textContent = 'ログインに失敗しました：' + resp.error + '（設定画面のクライアントID・承認済みJavaScript生成元をご確認ください）';
+          return;
+        }
+        googleAccessToken = resp.access_token;
+        listMyMapsFiles();
+      }
+    });
+  }
+  statusEl.textContent = 'Googleのログイン画面を開いています…';
+  googleTokenClient.requestAccessToken();
+}
+async function listMyMapsFiles(){
+  const statusEl = document.getElementById('gmapsStatus');
+  const listEl = document.getElementById('gmapsFileList');
+  statusEl.textContent = 'マイマップの一覧を取得しています…';
+  listEl.innerHTML = '';
+  try{
+    const url = "https://www.googleapis.com/drive/v3/files?q=" +
+      encodeURIComponent("mimeType='application/vnd.google-apps.map' and trashed=false") +
+      "&fields=" + encodeURIComponent("files(id,name)") + "&pageSize=50";
+    const res = await fetch(url, {headers:{Authorization: 'Bearer ' + googleAccessToken}});
+    if(!res.ok){
+      statusEl.textContent = 'マイマップの取得に失敗しました（HTTP ' + res.status + '）。';
+      return;
+    }
+    const data = await res.json();
+    if(!data.files || data.files.length===0){
+      statusEl.textContent = 'マイマップが見つかりませんでした。mymaps.google.com でマップを作成済みかご確認ください。';
+      return;
+    }
+    statusEl.textContent = '読み込みたいマイマップを選んでください：';
+    data.files.forEach(f=>{
+      const item = document.createElement('div');
+      item.className = 'gmaps-file-item';
+      item.textContent = '🗺️ ' + f.name;
+      item.onclick = ()=> importMyMapsFile(f.id, f.name);
+      listEl.appendChild(item);
+    });
+  }catch(e){
+    statusEl.textContent = '通信に失敗しました。時間をおいて再試行してください。';
+  }
+}
+async function importMyMapsFile(fileId, fileName){
+  const statusEl = document.getElementById('gmapsStatus');
+  statusEl.textContent = '「' + fileName + '」からピンを読み込んでいます…';
+  try{
+    const url = `https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=${encodeURIComponent('application/vnd.google-earth.kml+xml')}`;
+    const res = await fetch(url, {headers:{Authorization: 'Bearer ' + googleAccessToken}});
+    if(!res.ok){
+      statusEl.textContent = 'エクスポートに失敗しました（HTTP ' + res.status + '）。';
+      return;
+    }
+    const kmlText = await res.text();
+    const parser = new DOMParser();
+    const xml = parser.parseFromString(kmlText, 'text/xml');
+    const placemarks = Array.from(xml.getElementsByTagName('Placemark'));
+    let added = 0, skipped = 0;
+    placemarks.forEach(pm=>{
+      const pointEl = pm.getElementsByTagName('Point')[0];
+      if(!pointEl){ skipped++; return; } // 線・面のフィーチャ（ルート等）はピンとして取り込まない
+      const coordText = (pointEl.getElementsByTagName('coordinates')[0]||{}).textContent || '';
+      const parts = coordText.trim().split(',');
+      if(parts.length < 2){ skipped++; return; }
+      const lng = parseFloat(parts[0]), lat = parseFloat(parts[1]);
+      if(isNaN(lat) || isNaN(lng)){ skipped++; return; }
+      const nameEl = pm.getElementsByTagName('name')[0];
+      const name = nameEl ? nameEl.textContent.trim() : '(名称不明)';
+      draftPins.push({name, lat, lng, type:'destination'});
+      added++;
+    });
+    renderPinList();
+    refreshMiniMapMarkers();
+    statusEl.textContent = `${added}件のピンを追加しました${skipped>0 ? '（線・面など'+skipped+'件は対象外）' : ''}。順番はマイマップ内の並びのままです。必要に応じて並び替えてください。`;
+  }catch(e){
+    statusEl.textContent = 'KMLの解析に失敗しました。';
+  }
+}
+
+/* ===================== SETTINGS ===================== */
+async function openSettings(){
+  await loadGoogleClientId();
+  document.getElementById('googleClientIdInput').value = googleClientId;
+  document.getElementById('settingsStatus').innerHTML = googleClientId
+    ? '<span class="status-pill ok">設定済み</span>'
+    : '<span class="status-pill">未設定</span>';
+  const hint = document.getElementById('pagesUrlHint');
+  if(hint) hint.textContent = location.origin + location.pathname;
+  showScreen('settingsScreen');
+}
+async function saveSettings(){
+  const val = document.getElementById('googleClientIdInput').value.trim();
+  await window.storage.set('settings:googleClientId', val, false);
+  googleClientId = val;
+  showToast('保存しました');
+  document.getElementById('settingsStatus').innerHTML = googleClientId
+    ? '<span class="status-pill ok">設定済み</span>'
+    : '<span class="status-pill">未設定</span>';
 }
 function initMiniMap(){
   const el = document.getElementById('miniMap');
@@ -499,7 +807,7 @@ function initMiniMap(){
     }catch(err){}
     const custom = prompt('このピンの名前を入力してください', name);
     if(custom === null) return;
-    draftPins.push({name: custom || name, lat, lng});
+    draftPins.push({name: custom || name, lat, lng, type:'destination'});
     renderPinList();
     refreshMiniMapMarkers();
   });
@@ -511,7 +819,10 @@ function refreshMiniMapMarkers(){
   miniMapMarkers.forEach(m=>miniMapObj.removeLayer(m));
   miniMapMarkers = [];
   draftPins.forEach((p, i)=>{
-    const icon = L.divIcon({className:'', html:`<div class="pin-marker"><span>${i+1}</span></div>`, iconSize:[26,26], iconAnchor:[13,26]});
+    const html = p.type === 'waypoint'
+      ? `<div class="waypoint-marker"></div>`
+      : `<div class="pin-marker"><span>${i+1}</span></div>`;
+    const icon = L.divIcon({className:'', html, iconSize:[26,26], iconAnchor:[13,26]});
     const m = L.marker([p.lat, p.lng], {icon}).addTo(miniMapObj);
     miniMapMarkers.push(m);
   });
@@ -535,7 +846,7 @@ async function doGeoSearch(){
       div.className = 'search-item';
       div.textContent = item.display_name;
       div.onclick = ()=>{
-        draftPins.push({ name: item.display_name.split(',').slice(0,3).join(','), lat: parseFloat(item.lat), lng: parseFloat(item.lon) });
+        draftPins.push({ name: item.display_name.split(',').slice(0,3).join(','), lat: parseFloat(item.lat), lng: parseFloat(item.lon), type:'destination' });
         renderPinList();
         refreshMiniMapMarkers();
         resultsWrap.innerHTML = '';
@@ -605,7 +916,7 @@ async function computeAndLoadRoute(start, pins){
     }
     const route = data.routes[0];
     navSteps = [];
-    navLegPinNames = pins.map(p=>p.name);
+    navLegPins = pins.map(p=>({name:p.name, type: p.type || 'destination'}));
     route.legs.forEach((leg, li)=>{
       leg.steps.forEach(step=>{
         navSteps.push({...step, legIndex: li});
@@ -613,6 +924,7 @@ async function computeAndLoadRoute(start, pins){
     });
     navCurrentStepIndex = 0;
     navAnnounced = {};
+    navReachedLegs = new Set();
 
     drawRoute(route, pins);
     document.getElementById('navLoading').style.display = 'none';
@@ -632,8 +944,19 @@ function drawRoute(route, pins){
   const latlngs = route.geometry.coordinates.map(c=>[c[1], c[0]]);
   navRouteLayer = L.polyline(latlngs, {color:'#35d99b', weight:6, opacity:.9}).addTo(navMap);
 
+  let destNum = 0;
   pins.forEach((p,i)=>{
-    const icon = L.divIcon({className:'', html:`<div class="pin-marker" id="pinMk${i}"><span>${i+1}</span></div>`, iconSize:[26,26], iconAnchor:[13,26]});
+    const isWaypoint = p.type === 'waypoint';
+    let html;
+    if(isWaypoint){
+      html = `<div class="waypoint-marker" id="pinMk${i}"></div>`;
+    }else{
+      destNum++;
+      html = `<div class="pin-marker" id="pinMk${i}"><span>${destNum}</span></div>`;
+    }
+    const size = isWaypoint ? [14,14] : [26,26];
+    const anchor = isWaypoint ? [7,7] : [13,26];
+    const icon = L.divIcon({className:'', html, iconSize:size, iconAnchor:anchor});
     const m = L.marker([p.lat,p.lng], {icon}).addTo(navMap);
     navPinMarkers.push(m);
   });
@@ -712,16 +1035,21 @@ function advanceStep(){
   const step = navSteps[navCurrentStepIndex];
   if(!step) return;
   if(step.maneuver.type === 'arrive'){
-    const pinName = navLegPinNames[step.legIndex];
+    const pinInfo = navLegPins[step.legIndex] || {name:'目的地', type:'destination'};
+    const isWaypoint = pinInfo.type === 'waypoint';
     markPinReached(step.legIndex);
-    const isFinal = step.legIndex === navLegPinNames.length - 1;
+    navReachedLegs.add(step.legIndex);
+    const isFinal = step.legIndex === navLegPins.length - 1;
     if(isFinal){
-      speak(pinName + ' に到着しました。ナビゲーションを終了します。');
-      showToast('目的地に到着しました');
+      speak((isWaypoint ? '経路の終点に到達しました。' : pinInfo.name + ' に到着しました。') + 'ナビゲーションを終了します。');
+      showToast('ナビゲーションを終了しました');
       stopWatch();
+    }else if(isWaypoint){
+      // 通過点：音声案内はせず、地図上の見た目だけ更新して静かに次へ進む
+      showToast(pinInfo.name + ' を通過');
     }else{
-      speak(pinName + ' に到着しました。次のピンへ向かいます。');
-      showToast(pinName + ' に到着');
+      speak(pinInfo.name + ' に到着しました。次のピンへ向かいます。');
+      showToast(pinInfo.name + ' に到着');
     }
   }
   renderProgressRow();
@@ -766,15 +1094,18 @@ function updateInstructionCard(distToUpcoming){
 function renderProgressRow(){
   const wrap = document.getElementById('progressRow');
   wrap.innerHTML = '';
-  navLegPinNames.forEach((name, i)=>{
-    const reached = navSteps.some(s=>s.legIndex===i && s.maneuver.type==='arrive') &&
-      document.getElementById('pinMk'+i)?.classList.contains('reached');
-    const currentLeg = navSteps[navCurrentStepIndex] ? navSteps[navCurrentStepIndex].legIndex === i : false;
+  const currentLegIdx = navSteps[navCurrentStepIndex] ? navSteps[navCurrentStepIndex].legIndex : -1;
+  let destNum = 0;
+  navLegPins.forEach((pin, i)=>{
+    if(pin.type === 'waypoint') return; // 通過点は進捗バーには出さない（目的地のみ表示）
+    destNum++;
+    const reached = navReachedLegs.has(i);
+    const currentLeg = currentLegIdx === i;
     const div = document.createElement('div');
     div.className = 'prog-pin';
     div.innerHTML = `
-      <div class="prog-dot ${reached ? 'done' : (currentLeg ? 'current' : '')}">${reached ? '✓' : (i+1)}</div>
-      <div class="prog-label">${escapeHtml(name.split(',')[0])}</div>
+      <div class="prog-dot ${reached ? 'done' : (currentLeg ? 'current' : '')}">${reached ? '✓' : destNum}</div>
+      <div class="prog-label">${escapeHtml(pin.name.split(',')[0])}</div>
     `;
     wrap.appendChild(div);
   });
@@ -804,9 +1135,7 @@ function recalcRoute(){
   if(remainingPins.length === 0){ showToast('すべてのピンに到着済みです'); return; }
   document.getElementById('navLoading').style.display = 'flex';
   document.getElementById('navLoadingText').textContent = 'ルートを再計算しています…';
-  computeAndLoadRoute({lat:pos.lat, lng:pos.lng}, remainingPins).then(()=>{
-    navLegPinNames = remainingPins.map(p=>p.name);
-  });
+  computeAndLoadRoute({lat:pos.lat, lng:pos.lng}, remainingPins);
 }
 function stopWatch(){
   if(navWatchId !== null){ navigator.geolocation.clearWatch(navWatchId); navWatchId = null; }
@@ -818,6 +1147,7 @@ function endNav(){
 }
 
 /* ===================== init ===================== */
+loadGoogleClientId();
 goHome();
 </script>
 </body>
