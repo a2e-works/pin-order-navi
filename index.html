@@ -198,8 +198,8 @@
   .prog-dot.done{background:var(--accent); border-color:var(--accent); color:#06231a;}
   .prog-dot.current{border-color:var(--accent); color:var(--accent);}
   .prog-label{font-size:9px; color:var(--text-dim); max-width:52px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
-  .nav-controls{display:flex; gap:8px;}
-  .nav-controls .btn{flex:1; padding:11px; font-size:13px;}
+  .nav-controls{display:grid; grid-template-columns:1fr 1fr; gap:8px;}
+  .nav-controls .btn{padding:11px; font-size:12.5px;}
 
   .user-dot{
     width:18px; height:18px; border-radius:50%; background:#3ba7ff; border:3px solid #fff;
@@ -383,6 +383,7 @@
       <div class="nav-controls">
         <button class="btn secondary" onclick="skipToNextPin()">次のピンへ</button>
         <button class="btn secondary" onclick="recalcRoute()">再計算</button>
+        <button class="btn secondary" onclick="shareRouteToGoogleMaps(navActiveRoute)">Google Mapsで開く</button>
         <button class="btn danger" onclick="endNav()">終了</button>
       </div>
     </div>
@@ -396,27 +397,53 @@
 </div>
 
 <script>
-/* ===================== storage helpers ===================== */
+/* ===================== storage helpers =====================
+   このアプリはGitHub Pagesで単体公開されるため、Claude Artifacts専用の
+   window.storage APIは使えない。ブラウザ標準のlocalStorageを使う。 */
+const appStorage = {
+  async get(key){
+    try{
+      const v = localStorage.getItem(key);
+      return v === null ? null : {key, value: v};
+    }catch(e){ throw e; }
+  },
+  async set(key, value){
+    localStorage.setItem(key, value);
+    return {key, value};
+  },
+  async delete(key){
+    localStorage.removeItem(key);
+    return {key, deleted:true};
+  },
+  async list(prefix){
+    const keys = [];
+    for(let i=0;i<localStorage.length;i++){
+      const k = localStorage.key(i);
+      if(!prefix || k.indexOf(prefix) === 0) keys.push(k);
+    }
+    return {keys};
+  }
+};
 async function loadRoutes(){
   try{
-    const idx = await window.storage.list('route:', false);
+    const idx = await appStorage.list('route:');
     if(!idx || !idx.keys) return [];
     const routes = [];
     for(const k of idx.keys){
       try{
-        const r = await window.storage.get(k, false);
+        const r = await appStorage.get(k);
         if(r && r.value) routes.push(JSON.parse(r.value));
       }catch(e){}
     }
     routes.sort((a,b)=> (a.createdAt||0) - (b.createdAt||0));
     return routes;
-  }catch(e){ return []; }
+  }catch(e){ console.error('loadRoutes failed', e); return []; }
 }
 async function saveRouteToStorage(route){
-  await window.storage.set('route:'+route.id, JSON.stringify(route), false);
+  await appStorage.set('route:'+route.id, JSON.stringify(route));
 }
 async function deleteRouteFromStorage(id){
-  await window.storage.delete('route:'+id, false);
+  await appStorage.delete('route:'+id);
 }
 
 /* ===================== global state ===================== */
@@ -539,6 +566,12 @@ function renderRouteList(){
         <div class="iconbtn" title="削除" onclick="removeRoute('${r.id}')">🗑</div>
       </div>
     `;
+    const shareBtn = document.createElement('div');
+    shareBtn.className = 'iconbtn';
+    shareBtn.title = 'Google Mapsなど他のアプリに渡す';
+    shareBtn.textContent = '↗';
+    shareBtn.onclick = ()=> shareRouteToGoogleMaps(r);
+    card.querySelector('.actions').prepend(shareBtn);
     const startBtn = document.createElement('button');
     startBtn.className = 'btn';
     startBtn.style.padding = '10px 14px';
@@ -559,6 +592,54 @@ async function removeRoute(id){
   await deleteRouteFromStorage(id);
   routesCache = await loadRoutes();
   renderRouteList();
+}
+
+/* ===================== Google Maps などへの引き渡し ===================== */
+function buildGoogleMapsUrl(originLat, originLng, pins){
+  if(!pins || pins.length === 0) return null;
+  const dest = pins[pins.length - 1];
+  const mids = pins.slice(0, -1);
+  const CAP = 8; // Google MapsのURLは経由地点が多すぎると開けないため実用上の上限を設ける
+  const truncated = mids.length > CAP;
+  const usedMids = mids.slice(0, CAP);
+  let url = 'https://www.google.com/maps/dir/?api=1&travelmode=driving';
+  if(originLat != null && originLng != null){
+    url += `&origin=${originLat},${originLng}`;
+  }
+  url += `&destination=${dest.lat},${dest.lng}`;
+  if(usedMids.length > 0){
+    url += '&waypoints=' + usedMids.map(p=>`${p.lat},${p.lng}`).join('|');
+  }
+  return {url, truncated};
+}
+async function shareRouteToGoogleMaps(route){
+  if(!route || !route.pins || route.pins.length === 0){ showToast('ピンがありません'); return; }
+  let origin = null;
+  try{
+    origin = await new Promise((resolve)=>{
+      if(!('geolocation' in navigator)){ resolve(null); return; }
+      navigator.geolocation.getCurrentPosition(
+        (pos)=>resolve({lat:pos.coords.latitude, lng:pos.coords.longitude}),
+        ()=>resolve(null),
+        {timeout:4000, maximumAge:60000}
+      );
+    });
+  }catch(e){ origin = null; }
+
+  const built = buildGoogleMapsUrl(origin ? origin.lat : null, origin ? origin.lng : null, route.pins);
+  if(!built) return;
+  if(built.truncated){
+    showToast('Google Mapsの制限により、経由地点は最初の8件までしか渡せません');
+  }
+  if(navigator.share){
+    try{
+      await navigator.share({ title: route.name, text: route.name + ' のルート', url: built.url });
+      return;
+    }catch(e){
+      if(e && e.name === 'AbortError') return; // ユーザーがシェアをキャンセルしただけ
+    }
+  }
+  window.open(built.url, '_blank');
 }
 
 /* ===================== EDITOR ===================== */
@@ -827,7 +908,7 @@ function handleCsvFile(evt){
 /* ===================== Google My Maps (Drive API) import ===================== */
 async function loadGoogleClientId(){
   try{
-    const r = await window.storage.get('settings:googleClientId', false);
+    const r = await appStorage.get('settings:googleClientId');
     googleClientId = (r && r.value) ? r.value : '';
   }catch(e){ googleClientId = ''; }
 }
@@ -938,7 +1019,7 @@ async function openSettings(){
 }
 async function saveSettings(){
   const val = document.getElementById('googleClientIdInput').value.trim();
-  await window.storage.set('settings:googleClientId', val, false);
+  await appStorage.set('settings:googleClientId', val);
   googleClientId = val;
   showToast('保存しました');
   document.getElementById('settingsStatus').innerHTML = googleClientId
@@ -1070,9 +1151,14 @@ async function saveRoute(){
     pins: draftPins,
     createdAt: Date.now()
   };
-  await saveRouteToStorage(route);
-  showToast('保存しました');
-  await goHome();
+  try{
+    await saveRouteToStorage(route);
+    showToast('保存しました');
+    await goHome();
+  }catch(e){
+    console.error('saveRoute failed', e);
+    showToast('保存に失敗しました：' + (e && e.message ? e.message : e));
+  }
 }
 
 /* ===================== NAV: setup ===================== */
