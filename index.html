@@ -930,7 +930,17 @@ async function doGeoSearch(){
     const res = await fetch(url);
     const data = await res.json();
     if(!data || data.length===0){
-      resultsWrap.innerHTML = '<div class="sub">見つかりませんでした。別のキーワードでお試しください。</div>';
+      resultsWrap.innerHTML = '<div class="sub">見つかりませんでした。周辺エリアの地図を探しています…</div>';
+      const fallback = await findNearbyArea(q);
+      if(fallback){
+        showToast(`「${fallback.label}」周辺の地図を表示します`);
+        switchAddTab('map');
+        panMiniMapTo(fallback.lat, fallback.lng, 16);
+        document.getElementById('searchResults').innerHTML =
+          `<div class="sub">「${escapeHtml(q)}」はヒットしませんでしたが、「${escapeHtml(fallback.label)}」周辺の地図を「地図で追加」タブに表示しました。ズームしてタップしてください。</div>`;
+      }else{
+        resultsWrap.innerHTML = '<div class="sub">周辺エリアも見つかりませんでした。「地図で追加」タブからズームして探してみてください。</div>';
+      }
       return;
     }
     resultsWrap.innerHTML = '';
@@ -951,6 +961,34 @@ async function doGeoSearch(){
   }catch(e){
     resultsWrap.innerHTML = '<div class="sub">検索に失敗しました。通信状況をご確認ください。</div>';
   }
+}
+
+/* 完全一致で見つからない場合、末尾（番地・号・丁目など）を少しずつ削って
+   ヒットする範囲までクエリを広げ、そのエリアの中心地図を返す */
+async function findNearbyArea(originalQuery){
+  let q = originalQuery;
+  for(let attempt=0; attempt<6 && q.length>=3; attempt++){
+    try{
+      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&accept-language=ja&countrycodes=jp&limit=1`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if(data && data.length>0){
+        return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon), label: data[0].display_name.split(',').slice(0,2).join(',') };
+      }
+    }catch(e){ /* このattemptは無視して次へ */ }
+    // 末尾の番地・丁目・ハイフンなどを削って、より広いエリアで再検索
+    const shorter = q.replace(/[0-9０-９〇一二三四五六七八九十\-−ー番号丁目]+$/u, '').trim();
+    q = (shorter && shorter.length < q.length) ? shorter : q.slice(0, -2).trim();
+  }
+  return null;
+}
+function panMiniMapTo(lat, lng, zoom){
+  const doIt = ()=>{
+    if(!miniMapObj) return;
+    miniMapObj.setView([lat, lng], zoom || 16);
+    miniMapObj.invalidateSize();
+  };
+  if(miniMapObj){ doIt(); } else { setTimeout(doIt, 200); }
 }
 async function saveRoute(){
   const name = document.getElementById('routeNameInput').value.trim();
