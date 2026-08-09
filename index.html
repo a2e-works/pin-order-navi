@@ -614,17 +614,14 @@ function buildGoogleMapsUrl(originLat, originLng, pins){
 }
 async function shareRouteToGoogleMaps(route){
   if(!route || !route.pins || route.pins.length === 0){ showToast('ピンがありません'); return; }
+  // 現在地取得を待つとユーザー操作の有効期限が切れて共有メニューが出せなくなるため、
+  // ナビ中で既にわかっている位置があればそれを使い、なければ出発地を指定しない
+  // （出発地を省略すると、Google Maps側が自動的に現在地を使ってくれる）
   let origin = null;
-  try{
-    origin = await new Promise((resolve)=>{
-      if(!('geolocation' in navigator)){ resolve(null); return; }
-      navigator.geolocation.getCurrentPosition(
-        (pos)=>resolve({lat:pos.coords.latitude, lng:pos.coords.longitude}),
-        ()=>resolve(null),
-        {timeout:4000, maximumAge:60000}
-      );
-    });
-  }catch(e){ origin = null; }
+  if(navUserMarker){
+    const ll = navUserMarker.getLatLng();
+    origin = {lat: ll.lat, lng: ll.lng};
+  }
 
   const built = buildGoogleMapsUrl(origin ? origin.lat : null, origin ? origin.lng : null, route.pins);
   if(!built) return;
@@ -637,6 +634,8 @@ async function shareRouteToGoogleMaps(route){
       return;
     }catch(e){
       if(e && e.name === 'AbortError') return; // ユーザーがシェアをキャンセルしただけ
+      window.open(built.url, '_blank');
+      return;
     }
   }
   window.open(built.url, '_blank');
