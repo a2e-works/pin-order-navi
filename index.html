@@ -91,13 +91,13 @@
     background:var(--surface); border:1px solid var(--border); border-radius:12px;
     padding:12px; display:flex; flex-direction:column; gap:9px;
   }
-  .pin-row-top{display:flex; align-items:center; gap:10px;}
+  .pin-row-top{display:flex; align-items:center; gap:10px; touch-action:pan-y; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none;}
   .pin-row-bottom{display:flex; align-items:center; gap:8px;}
   .pin-num{
     width:26px; height:26px; border-radius:50%; background:var(--accent-dim); color:var(--accent);
     font-size:12px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;
   }
-  .pin-row .pname{flex:1; font-size:14px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer; text-decoration:underline dotted var(--text-dim);}
+  .pin-row .pname{flex:1; font-size:14px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer; text-decoration:underline dotted var(--text-dim); -webkit-user-select:none; user-select:none; -webkit-touch-callout:none;}
   .pin-actions{display:flex; gap:6px; margin-left:auto;}
   .pin-row.dragging{
     opacity:.92; box-shadow:0 10px 26px rgba(0,0,0,.55); background:var(--surface-2);
@@ -713,6 +713,7 @@ function switchAddTab(tab){
 function attachLongPressToRow(top, p){
   let timer = null, startX = 0, startY = 0, fired = false;
   const THRESHOLD = 10, DURATION = 550;
+  top.addEventListener('contextmenu', (e)=> e.preventDefault());
   top.addEventListener('pointerdown', (e)=>{
     if(e.target.closest('.drag-handle')) return;
     fired = false;
