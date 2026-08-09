@@ -394,6 +394,16 @@
     </div>
   </div>
 
+  <!-- ============ Google Maps 分割起動モーダル ============ -->
+  <div class="center-msg" id="gmapsSegModal" style="display:none; z-index:1000;">
+    <div style="background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:20px; max-width:340px; width:100%; text-align:left;">
+      <div style="font-size:16px; font-weight:700; margin-bottom:6px;">Google Mapsは1回で最大9地点までです</div>
+      <div class="sub" style="margin-bottom:14px; line-height:1.7;">区間ごとに分けました。<b>上から順番に</b>開いてください（前の区間のゴールが次の区間のスタートになるようにつないであります）。</div>
+      <div id="gmapsSegList" style="display:flex; flex-direction:column; gap:8px; max-height:50vh; overflow-y:auto;"></div>
+      <button class="btn secondary block" style="margin-top:14px;" onclick="closeGmapsSegModal()">閉じる</button>
+    </div>
+  </div>
+
 </div>
 
 <script>
@@ -622,12 +632,46 @@ function shareRouteToGoogleMaps(route){
     const ll = navUserMarker.getLatLng();
     origin = {lat: ll.lat, lng: ll.lng};
   }
-  const built = buildGoogleMapsUrl(origin ? origin.lat : null, origin ? origin.lng : null, route.pins);
-  if(!built) return;
-  if(built.truncated){
-    showToast('Google Mapsの制限により、経由地点は最初の8件までしか渡せません');
+  const CAP = 8; // 1リンクあたりの経由地点の上限（+目的地1で最大9地点）
+  if(route.pins.length <= CAP + 1){
+    const built = buildGoogleMapsUrl(origin ? origin.lat : null, origin ? origin.lng : null, route.pins);
+    if(!built) return;
+    window.open(built.url, '_blank');
+    return;
   }
-  window.open(built.url, '_blank');
+  // 9地点を超える場合は、前の区間のゴールを次の区間のスタートにしながら複数リンクに分割する
+  const segments = [];
+  let segOrigin = origin;
+  let idx = 0;
+  while(idx < route.pins.length){
+    const chunk = route.pins.slice(idx, idx + CAP + 1);
+    const built = buildGoogleMapsUrl(segOrigin ? segOrigin.lat : null, segOrigin ? segOrigin.lng : null, chunk);
+    const last = chunk[chunk.length - 1];
+    segments.push({
+      url: built.url,
+      label: `${idx+1}〜${idx+chunk.length}件目（${chunk[0].name.split(',')[0]} 〜 ${last.name.split(',')[0]}）`
+    });
+    segOrigin = {lat: last.lat, lng: last.lng};
+    idx += chunk.length;
+  }
+  openGmapsSegModal(segments);
+}
+function openGmapsSegModal(segments){
+  const list = document.getElementById('gmapsSegList');
+  list.innerHTML = '';
+  segments.forEach((seg, i)=>{
+    const btn = document.createElement('button');
+    btn.className = 'btn secondary block';
+    btn.style.textAlign = 'left';
+    btn.style.fontSize = '13px';
+    btn.textContent = `区間${i+1}：${seg.label}`;
+    btn.onclick = ()=> window.open(seg.url, '_blank');
+    list.appendChild(btn);
+  });
+  document.getElementById('gmapsSegModal').style.display = 'flex';
+}
+function closeGmapsSegModal(){
+  document.getElementById('gmapsSegModal').style.display = 'none';
 }
 
 /* ===================== EDITOR ===================== */
