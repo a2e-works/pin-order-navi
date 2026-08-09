@@ -568,7 +568,7 @@ function renderRouteList(){
     `;
     const shareBtn = document.createElement('div');
     shareBtn.className = 'iconbtn';
-    shareBtn.title = 'Google Mapsなど他のアプリに渡す';
+    shareBtn.title = 'Google Mapsで開く';
     shareBtn.textContent = '↗';
     shareBtn.onclick = ()=> shareRouteToGoogleMaps(r);
     card.querySelector('.actions').prepend(shareBtn);
@@ -612,31 +612,20 @@ function buildGoogleMapsUrl(originLat, originLng, pins){
   }
   return {url, truncated};
 }
-async function shareRouteToGoogleMaps(route){
+function shareRouteToGoogleMaps(route){
   if(!route || !route.pins || route.pins.length === 0){ showToast('ピンがありません'); return; }
-  // 現在地取得を待つとユーザー操作の有効期限が切れて共有メニューが出せなくなるため、
-  // ナビ中で既にわかっている位置があればそれを使い、なければ出発地を指定しない
-  // （出発地を省略すると、Google Maps側が自動的に現在地を使ってくれる）
+  // 共有メニュー（ACTION_SEND）はGoogleマップアプリが受け取り側として登録されていないため出てこない。
+  // 代わりにURLを直接開くと、Android標準のApp Linksの仕組みで
+  // インストール済みのGoogleマップアプリが自動的に起動する。
   let origin = null;
   if(navUserMarker){
     const ll = navUserMarker.getLatLng();
     origin = {lat: ll.lat, lng: ll.lng};
   }
-
   const built = buildGoogleMapsUrl(origin ? origin.lat : null, origin ? origin.lng : null, route.pins);
   if(!built) return;
   if(built.truncated){
     showToast('Google Mapsの制限により、経由地点は最初の8件までしか渡せません');
-  }
-  if(navigator.share){
-    try{
-      await navigator.share({ title: route.name, text: route.name + ' のルート', url: built.url });
-      return;
-    }catch(e){
-      if(e && e.name === 'AbortError') return; // ユーザーがシェアをキャンセルしただけ
-      window.open(built.url, '_blank');
-      return;
-    }
   }
   window.open(built.url, '_blank');
 }
