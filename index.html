@@ -217,6 +217,8 @@
     box-shadow:0 2px 6px rgba(0,0,0,.4);
   }
   .waypoint-marker.reached{border-color:#4a5262;}
+  .pin-marker.editing{box-shadow:0 0 0 6px rgba(255,180,84,.45), 0 2px 6px rgba(0,0,0,.4); background:var(--warn);}
+  .waypoint-marker.editing{border-color:var(--warn); box-shadow:0 0 0 6px rgba(255,180,84,.45);}
 
   .toast{
     position:absolute; left:50%; bottom:150px; transform:translateX(-50%);
@@ -293,7 +295,10 @@
           </div>
 
           <div id="mapTab" style="margin-top:10px; display:none;">
-            <div class="sub" style="margin-bottom:8px;">地図をタップしてピンを追加</div>
+            <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
+              <div class="sub" id="mapTabHint" style="flex:1;">地図をタップしてピンを追加</div>
+              <button class="btn secondary" id="mapEditDoneBtn" style="display:none; padding:8px 14px; font-size:12.5px;" onclick="exitPinPositionEditor()">完了</button>
+            </div>
             <div id="miniMap" style="display:block;"></div>
           </div>
 
@@ -420,6 +425,7 @@ let editingRouteId = null;
 let draftPins = [];
 let addTab = 'search';
 let miniMapObj = null, miniMapMarkers = [];
+let mapEditTargetPin = null; // 長押しで位置修正中のピン（nullなら通常の新規追加モード）
 
 let navMap = null, navRouteLayer = null, navUserMarker = null, navPinMarkers = [];
 let navSteps = [];       // flattened steps across all legs
@@ -558,6 +564,7 @@ async function removeRoute(id){
 /* ===================== EDITOR ===================== */
 function openEditor(routeId){
   editingRouteId = routeId;
+  mapEditTargetPin = null;
   const existing = routeId ? routesCache.find(r=>r.id===routeId) : null;
   draftPins = existing ? JSON.parse(JSON.stringify(existing.pins)) : [];
   document.getElementById('routeNameInput').value = existing ? existing.name : '';
@@ -602,6 +609,7 @@ function renderPinList(){
     top.appendChild(handle);
     top.appendChild(numEl);
     top.appendChild(nameEl);
+    attachLongPressToRow(top, p);
 
     const bottom = document.createElement('div');
     bottom.className = 'pin-row-bottom';
@@ -696,8 +704,60 @@ function switchAddTab(tab){
   document.getElementById('mapTab').style.display = tab==='map' ? 'block' : 'none';
   document.getElementById('csvTab').style.display = tab==='csv' ? 'block' : 'none';
   document.getElementById('gmapsTab').style.display = tab==='gmaps' ? 'block' : 'none';
-  if(tab==='map') initMiniMap();
+  if(tab!=='map' && mapEditTargetPin){ mapEditTargetPin = null; refreshMiniMapMarkers(); }
+  if(tab==='map'){ initMiniMap(); updateMapTabHint(); }
   if(tab==='gmaps') initGmapsTab();
+}
+
+/* ===================== 長押しでピンの位置を修正 ===================== */
+function attachLongPressToRow(top, p){
+  let timer = null, startX = 0, startY = 0, fired = false;
+  const THRESHOLD = 10, DURATION = 550;
+  top.addEventListener('pointerdown', (e)=>{
+    if(e.target.closest('.drag-handle')) return;
+    fired = false;
+    startX = e.clientX; startY = e.clientY;
+    timer = setTimeout(()=>{
+      fired = true;
+      if(navigator.vibrate) navigator.vibrate(15);
+      openPinPositionEditor(p);
+    }, DURATION);
+  });
+  const cancel = ()=>{ if(timer){ clearTimeout(timer); timer = null; } };
+  top.addEventListener('pointermove', (e)=>{
+    if(!timer) return;
+    if(Math.abs(e.clientX-startX) > THRESHOLD || Math.abs(e.clientY-startY) > THRESHOLD) cancel();
+  });
+  top.addEventListener('pointerup', cancel);
+  top.addEventListener('pointercancel', cancel);
+  top.addEventListener('click', (e)=>{
+    if(fired){ e.preventDefault(); e.stopPropagation(); fired = false; }
+  }, true);
+}
+function openPinPositionEditor(p){
+  mapEditTargetPin = p;
+  switchAddTab('map');
+  panMiniMapTo(p.lat, p.lng, 17);
+  updateMapTabHint();
+  refreshMiniMapMarkers();
+  showToast('地図をタップして位置を修正してください');
+}
+function exitPinPositionEditor(){
+  mapEditTargetPin = null;
+  updateMapTabHint();
+  refreshMiniMapMarkers();
+}
+function updateMapTabHint(){
+  const hint = document.getElementById('mapTabHint');
+  const doneBtn = document.getElementById('mapEditDoneBtn');
+  if(!hint || !doneBtn) return;
+  if(mapEditTargetPin){
+    hint.textContent = `「${mapEditTargetPin.name}」の位置をタップして修正`;
+    doneBtn.style.display = 'inline-block';
+  }else{
+    hint.textContent = '地図をタップしてピンを追加';
+    doneBtn.style.display = 'none';
+  }
 }
 
 /* ===================== CSV (Google Takeout) import ===================== */
@@ -892,6 +952,14 @@ function initMiniMap(){
   L.control.attribution({prefix:false}).addAttribution('&copy; OpenStreetMap contributors').addTo(miniMapObj);
   miniMapObj.on('click', async (e)=>{
     const {lat, lng} = e.latlng;
+    if(mapEditTargetPin){
+      mapEditTargetPin.lat = lat;
+      mapEditTargetPin.lng = lng;
+      renderPinList();
+      refreshMiniMapMarkers();
+      showToast('位置を更新しました');
+      return;
+    }
     let name = '緯度' + lat.toFixed(4) + ' 経度' + lng.toFixed(4);
     try{
       const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&accept-language=ja`);
@@ -912,9 +980,10 @@ function refreshMiniMapMarkers(){
   miniMapMarkers.forEach(m=>miniMapObj.removeLayer(m));
   miniMapMarkers = [];
   draftPins.forEach((p, i)=>{
+    const isEditing = p === mapEditTargetPin;
     const html = p.type === 'waypoint'
-      ? `<div class="waypoint-marker"></div>`
-      : `<div class="pin-marker"><span>${i+1}</span></div>`;
+      ? `<div class="waypoint-marker${isEditing ? ' editing' : ''}"></div>`
+      : `<div class="pin-marker${isEditing ? ' editing' : ''}"><span>${i+1}</span></div>`;
     const icon = L.divIcon({className:'', html, iconSize:[26,26], iconAnchor:[13,26]});
     const m = L.marker([p.lat, p.lng], {icon}).addTo(miniMapObj);
     miniMapMarkers.push(m);
