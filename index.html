@@ -476,7 +476,8 @@ let navActiveRoute = null;
 let voicesReady = false;
 let lastPosUpdateTime = 0;
 const RESYNC_GAP_MS = 15000; // 15秒以上更新が止まっていたら通話等で離れていたとみなす
-let navReachedLegs = new Set();
+let navOriginalPins = [];  // ルート全体の並び（寄り道で経路を作り直しても変わらない）
+let navVisited = [];       // navOriginalPinsの各インデックスに対応する到達フラグ
 
 let googleClientId = '';
 let googleAccessToken = null;
@@ -1278,7 +1279,9 @@ async function startNav(route){
   }
   navigator.geolocation.getCurrentPosition(async (pos)=>{
     const start = {lat: pos.coords.latitude, lng: pos.coords.longitude};
-    await computeAndLoadRoute(start, route.pins);
+    navOriginalPins = route.pins.map((p, idx)=>({...p, _origIndex: idx}));
+    navVisited = new Array(route.pins.length).fill(false);
+    await computeAndLoadRoute(start, navOriginalPins);
     beginWatch();
   }, (err)=>{
     document.getElementById('navLoadingText').textContent = '現在地を取得できませんでした（位置情報の許可を確認してください）。';
@@ -1306,7 +1309,7 @@ async function computeAndLoadRoute(start, pins){
     }
     const route = data.routes[0];
     navSteps = [];
-    navLegPins = pins.map(p=>({name:p.name, type: p.type || 'destination'}));
+    navLegPins = pins.map(p=>({name:p.name, type: p.type || 'destination', origIndex: p._origIndex}));
     route.legs.forEach((leg, li)=>{
       leg.steps.forEach(step=>{
         navSteps.push({...step, legIndex: li});
@@ -1314,7 +1317,6 @@ async function computeAndLoadRoute(start, pins){
     });
     navCurrentStepIndex = 0;
     navAnnounced = {};
-    navReachedLegs = new Set();
 
     drawRoute(route, pins);
     document.getElementById('navLoading').style.display = 'none';
@@ -1428,7 +1430,7 @@ function advanceStep(){
     const pinInfo = navLegPins[step.legIndex] || {name:'目的地', type:'destination'};
     const isWaypoint = pinInfo.type === 'waypoint';
     markPinReached(step.legIndex);
-    navReachedLegs.add(step.legIndex);
+    if(pinInfo.origIndex != null) navVisited[pinInfo.origIndex] = true;
     const isFinal = step.legIndex === navLegPins.length - 1;
     if(isFinal){
       speak((isWaypoint ? '経路の終点に到達しました。' : pinInfo.name + ' に到着しました。') + 'ナビゲーションを終了します。');
@@ -1484,21 +1486,46 @@ function updateInstructionCard(distToUpcoming){
 function renderProgressRow(){
   const wrap = document.getElementById('progressRow');
   wrap.innerHTML = '';
-  const currentLegIdx = navSteps[navCurrentStepIndex] ? navSteps[navCurrentStepIndex].legIndex : -1;
+  const currentOrigIdx = navLegPins[navSteps[navCurrentStepIndex] ? navSteps[navCurrentStepIndex].legIndex : -1]
+    ? navLegPins[navSteps[navCurrentStepIndex].legIndex].origIndex : -1;
   let destNum = 0;
-  navLegPins.forEach((pin, i)=>{
+  navOriginalPins.forEach((pin)=>{
     if(pin.type === 'waypoint') return; // 通過点は進捗バーには出さない（目的地のみ表示）
     destNum++;
-    const reached = navReachedLegs.has(i);
-    const currentLeg = currentLegIdx === i;
+    const reached = !!navVisited[pin._origIndex];
+    const currentLeg = currentOrigIdx === pin._origIndex;
     const div = document.createElement('div');
     div.className = 'prog-pin';
-    div.innerHTML = `
-      <div class="prog-dot ${reached ? 'done' : (currentLeg ? 'current' : '')}">${reached ? '✓' : destNum}</div>
-      <div class="prog-label">${escapeHtml(pin.name.split(',')[0])}</div>
-    `;
+    const dot = document.createElement('div');
+    dot.className = 'prog-dot ' + (reached ? 'done' : (currentLeg ? 'current' : ''));
+    dot.textContent = reached ? '✓' : destNum;
+    if(reached){
+      dot.style.cursor = 'pointer';
+      dot.title = 'タップして寄り道';
+      dot.onclick = ()=> detourToPin(pin._origIndex);
+    }
+    const label = document.createElement('div');
+    label.className = 'prog-label';
+    label.textContent = pin.name.split(',')[0];
+    div.appendChild(dot);
+    div.appendChild(label);
     wrap.appendChild(div);
   });
+}
+
+/* ===================== NAV: 寄り道して元の予定に戻る ===================== */
+function detourToPin(origIdx){
+  if(!navUserMarker){ showToast('現在地がまだ取得できていません'); return; }
+  const target = navOriginalPins[origIdx];
+  if(!target) return;
+  if(!confirm(`「${target.name}」へ寄り道しますか？\n（到着後は元の予定の続きに自動で戻ります）`)) return;
+  const pos = navUserMarker.getLatLng();
+  const remaining = navOriginalPins.filter(p => !navVisited[p._origIndex]);
+  const newPins = [target, ...remaining];
+  document.getElementById('navLoading').style.display = 'flex';
+  document.getElementById('navLoadingText').textContent = '寄り道ルートを計算しています…';
+  computeAndLoadRoute({lat:pos.lat, lng:pos.lng}, newPins);
+  showToast(target.name + ' へ寄り道します');
 }
 
 /* ===================== NAV: controls ===================== */
@@ -1515,13 +1542,7 @@ function skipToNextPin(){
 function recalcRoute(){
   if(!navUserMarker){ showToast('現在地がまだ取得できていません'); return; }
   const pos = navUserMarker.getLatLng();
-  const remainingLegIndex = navSteps[navCurrentStepIndex] ? navSteps[navCurrentStepIndex].legIndex : 0;
-  let startLeg = remainingLegIndex;
-  // if current step is an 'arrive' step, that leg is done, move to next
-  if(navSteps[navCurrentStepIndex] && navSteps[navCurrentStepIndex].maneuver.type === 'arrive'){
-    startLeg = remainingLegIndex + 1;
-  }
-  const remainingPins = navActiveRoute.pins.slice(startLeg);
+  const remainingPins = navOriginalPins.filter(p => !navVisited[p._origIndex]);
   if(remainingPins.length === 0){ showToast('すべてのピンに到着済みです'); return; }
   document.getElementById('navLoading').style.display = 'flex';
   document.getElementById('navLoadingText').textContent = 'ルートを再計算しています…';
