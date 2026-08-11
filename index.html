@@ -276,6 +276,15 @@
         </div>
 
         <div>
+          <label class="field-label">道路の優先度（保存時のデフォルト。ナビ中にも変更できます）</label>
+          <div class="tabbtns" style="grid-template-columns:1fr 1fr 1fr;">
+            <button class="btn" id="prefBtnNormal" onclick="setDraftRoutePreference('normal')">通常</button>
+            <button class="btn off" id="prefBtnMotorway" onclick="setDraftRoutePreference('motorway')">高速回避</button>
+            <button class="btn off" id="prefBtnToll" onclick="setDraftRoutePreference('toll')">有料回避</button>
+          </div>
+        </div>
+
+        <div>
           <label class="field-label">経由ピン（順番どおり）</label>
           <div id="pinListWrap" style="display:flex; flex-direction:column; gap:8px;"></div>
         </div>
@@ -381,6 +390,7 @@
 
     <div class="bottom-panel">
       <div class="progress-row" id="progressRow"></div>
+      <button class="btn secondary block" id="routePrefChip" style="margin-bottom:8px; font-size:12.5px;" onclick="openRoutePrefModal()">🛣 通常（最速） ▾</button>
       <div class="nav-controls">
         <button class="btn secondary" onclick="skipToNextPin()">次のピンへ</button>
         <button class="btn secondary" onclick="recalcRoute()">再計算</button>
@@ -392,6 +402,20 @@
     <div class="center-msg" id="navLoading">
       <div class="spinner"></div>
       <div id="navLoadingText" style="font-size:14px; color:var(--text-dim);">現在地を取得しています…</div>
+    </div>
+  </div>
+
+  <!-- ============ 道路優先度 切り替えモーダル ============ -->
+  <div class="center-msg" id="routePrefModal" style="display:none; z-index:1000;">
+    <div style="background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:20px; max-width:320px; width:100%;">
+      <div style="font-size:16px; font-weight:700; margin-bottom:6px;">道路の優先度を選択</div>
+      <div class="sub" style="margin-bottom:14px;">選ぶと現在地から自動で再計算します（高速回避と有料回避は同時には使えません）。</div>
+      <div style="display:flex; flex-direction:column; gap:8px;">
+        <button class="btn secondary block" onclick="setRoutePreference('normal')">通常（最速）</button>
+        <button class="btn secondary block" onclick="setRoutePreference('motorway')">高速道路を避ける</button>
+        <button class="btn secondary block" onclick="setRoutePreference('toll')">有料道路を避ける</button>
+      </div>
+      <button class="btn secondary block" style="margin-top:14px;" onclick="closeRoutePrefModal()">閉じる</button>
     </div>
   </div>
 
@@ -461,6 +485,7 @@ async function deleteRouteFromStorage(id){
 let routesCache = [];
 let editingRouteId = null;
 let draftPins = [];
+let draftRoutePreference = 'normal';
 let addTab = 'search';
 let miniMapObj = null, miniMapMarkers = [];
 let miniMapUserMarker = null, miniMapWatchId = null, miniMapLastPos = null;
@@ -478,6 +503,7 @@ let lastPosUpdateTime = 0;
 const RESYNC_GAP_MS = 15000; // 15秒以上更新が止まっていたら通話等で離れていたとみなす
 let navOriginalPins = [];  // ルート全体の並び（寄り道で経路を作り直しても変わらない）
 let navVisited = [];       // navOriginalPinsの各インデックスに対応する到達フラグ
+let navRoutePreference = 'normal'; // 'normal' | 'motorway'（高速回避） | 'toll'（有料回避）
 
 let googleClientId = '';
 let googleAccessToken = null;
@@ -696,13 +722,21 @@ function openEditor(routeId){
   mapEditTargetPin = null;
   const existing = routeId ? routesCache.find(r=>r.id===routeId) : null;
   draftPins = existing ? JSON.parse(JSON.stringify(existing.pins)) : [];
+  draftRoutePreference = existing ? (existing.routePreference || 'normal') : 'normal';
   document.getElementById('routeNameInput').value = existing ? existing.name : '';
   document.getElementById('editorTitle').textContent = existing ? 'ルートを編集' : '新しいルート';
   document.getElementById('searchResults').innerHTML = '';
   document.getElementById('searchInput').value = '';
   renderPinList();
+  setDraftRoutePreference(draftRoutePreference);
   switchAddTab('search');
   showScreen('editorScreen');
+}
+function setDraftRoutePreference(pref){
+  draftRoutePreference = pref;
+  document.getElementById('prefBtnNormal').className = 'btn' + (pref==='normal' ? '' : ' off');
+  document.getElementById('prefBtnMotorway').className = 'btn' + (pref==='motorway' ? '' : ' off');
+  document.getElementById('prefBtnToll').className = 'btn' + (pref==='toll' ? '' : ' off');
 }
 function renderPinList(){
   const wrap = document.getElementById('pinListWrap');
@@ -1253,6 +1287,7 @@ async function saveRoute(){
     id: editingRouteId || uid(),
     name,
     pins: draftPins,
+    routePreference: draftRoutePreference,
     createdAt: Date.now()
   };
   try{
@@ -1268,7 +1303,9 @@ async function saveRoute(){
 /* ===================== NAV: setup ===================== */
 async function startNav(route){
   navActiveRoute = route;
+  navRoutePreference = route.routePreference || 'normal';
   showScreen('navScreen');
+  updateRoutePrefChip();
   document.getElementById('navLoading').style.display = 'flex';
   document.getElementById('navLoadingText').textContent = '現在地を取得しています…';
   initNavMapIfNeeded();
@@ -1298,13 +1335,16 @@ function initNavMapIfNeeded(){
 async function computeAndLoadRoute(start, pins){
   const coordStr = [ [start.lng,start.lat], ...pins.map(p=>[p.lng,p.lat]) ]
     .map(c=>c.join(',')).join(';');
-  const url = `https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson&steps=true`;
+  let url = `https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson&steps=true`;
+  if(navRoutePreference === 'motorway') url += '&exclude=motorway';
+  else if(navRoutePreference === 'toll') url += '&exclude=toll';
   document.getElementById('navLoadingText').textContent = 'ルートを計算しています…';
   try{
     const res = await fetch(url);
     const data = await res.json();
     if(!data.routes || data.routes.length===0){
-      document.getElementById('navLoadingText').textContent = 'ルートを計算できませんでした。ピンの位置をご確認ください。';
+      const extra = navRoutePreference !== 'normal' ? '「通常」設定に戻すと計算できる場合があります。' : '';
+      document.getElementById('navLoadingText').textContent = 'ルートを計算できませんでした。ピンの位置をご確認ください。' + extra;
       return;
     }
     const route = data.routes[0];
@@ -1511,6 +1551,30 @@ function renderProgressRow(){
     div.appendChild(label);
     wrap.appendChild(div);
   });
+}
+
+/* ===================== NAV: 道路優先度の切り替え ===================== */
+function openRoutePrefModal(){
+  document.getElementById('routePrefModal').style.display = 'flex';
+}
+function closeRoutePrefModal(){
+  document.getElementById('routePrefModal').style.display = 'none';
+}
+function updateRoutePrefChip(){
+  const el = document.getElementById('routePrefChip');
+  if(!el) return;
+  const labels = {normal:'🛣 通常（最速） ▾', motorway:'🛣 高速道路を避ける ▾', toll:'🛣 有料道路を避ける ▾'};
+  el.textContent = labels[navRoutePreference] || labels.normal;
+}
+function setRoutePreference(pref){
+  navRoutePreference = pref;
+  updateRoutePrefChip();
+  closeRoutePrefModal();
+  if(navUserMarker){
+    recalcRoute();
+  }else{
+    showToast('現在地取得後、この設定でルートを計算します');
+  }
 }
 
 /* ===================== NAV: 寄り道して元の予定に戻る ===================== */
