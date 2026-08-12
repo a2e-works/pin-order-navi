@@ -285,7 +285,10 @@
         </div>
 
         <div>
-          <label class="field-label">経由ピン（順番どおり）</label>
+          <div style="display:flex; align-items:center; gap:10px; margin-bottom:6px;">
+            <label class="field-label" style="margin:0; flex:1;">経由ピン（順番どおり）</label>
+            <button class="btn secondary" style="padding:8px 14px; font-size:12.5px;" onclick="toggleReorderMode()">↕ 並べ替え</button>
+          </div>
           <div id="pinListWrap" style="display:flex; flex-direction:column; gap:8px;"></div>
         </div>
 
@@ -486,6 +489,7 @@ let routesCache = [];
 let editingRouteId = null;
 let draftPins = [];
 let draftRoutePreference = 'normal';
+let reorderMode = false;
 let addTab = 'search';
 let miniMapObj = null, miniMapMarkers = [];
 let miniMapUserMarker = null, miniMapWatchId = null, miniMapLastPos = null;
@@ -720,6 +724,7 @@ function closeGmapsSegModal(){
 function openEditor(routeId){
   editingRouteId = routeId;
   mapEditTargetPin = null;
+  reorderMode = false;
   const existing = routeId ? routesCache.find(r=>r.id===routeId) : null;
   draftPins = existing ? JSON.parse(JSON.stringify(existing.pins)) : [];
   draftRoutePreference = existing ? (existing.routePreference || 'normal') : 'normal';
@@ -745,6 +750,12 @@ function renderPinList(){
     return;
   }
   wrap.innerHTML = '';
+
+  if(reorderMode){
+    renderReorderModeList(wrap);
+    return;
+  }
+
   draftPins.forEach((p, i)=>{
     if(!p.type) p.type = 'destination'; // 既存データの後方互換
     const isWaypoint = p.type === 'waypoint';
@@ -754,10 +765,6 @@ function renderPinList(){
 
     const top = document.createElement('div');
     top.className = 'pin-row-top';
-    const handle = document.createElement('div');
-    handle.className = 'drag-handle';
-    handle.textContent = '⠿';
-    handle.addEventListener('pointerdown', (e)=>startPinDrag(e, row));
     const numEl = document.createElement('div');
     numEl.className = 'pin-num';
     numEl.textContent = i+1;
@@ -769,7 +776,6 @@ function renderPinList(){
       const newName = prompt('ピンの名前を変更', p.name);
       if(newName && newName.trim()){ p.name = newName.trim(); renderPinList(); refreshMiniMapMarkers(); }
     };
-    top.appendChild(handle);
     top.appendChild(numEl);
     top.appendChild(nameEl);
     attachLongPressToRow(top, p);
@@ -798,60 +804,61 @@ function renderPinList(){
   });
 }
 
-/* ===================== drag-to-reorder (pointer events) ===================== */
-function startPinDrag(e, row){
-  e.preventDefault();
-  const wrap = row.parentElement;
-  const pointerId = e.pointerId;
-  try{ row.setPointerCapture(pointerId); }catch(err){}
-  row.classList.add('dragging');
-  let dragStartY = e.clientY;
-
-  function onMove(ev){
-    if(ev.pointerId !== pointerId) return;
-    row.style.transform = 'translateY(' + (ev.clientY - dragStartY) + 'px)';
-
-    const children = Array.from(wrap.children);
-    const idx = children.indexOf(row);
-    const rowRect = row.getBoundingClientRect();
-    const rowCenter = rowRect.top + rowRect.height/2;
-
-    const prev = children[idx-1];
-    if(prev){
-      const pr = prev.getBoundingClientRect();
-      if(rowCenter < pr.top + pr.height/2){
-        wrap.insertBefore(row, prev);
-        dragStartY -= pr.height;
-        row.style.transform = 'translateY(' + (ev.clientY - dragStartY) + 'px)';
-        return;
-      }
-    }
-    const next = children[idx+1];
-    if(next){
-      const nr = next.getBoundingClientRect();
-      if(rowCenter > nr.top + nr.height/2){
-        wrap.insertBefore(next, row);
-        dragStartY += nr.height;
-        row.style.transform = 'translateY(' + (ev.clientY - dragStartY) + 'px)';
-      }
-    }
-  }
-  function onUp(ev){
-    if(ev.pointerId !== pointerId) return;
-    document.removeEventListener('pointermove', onMove);
-    document.removeEventListener('pointerup', onUp);
-    document.removeEventListener('pointercancel', onUp);
-    try{ row.releasePointerCapture(pointerId); }catch(err){}
-    row.classList.remove('dragging');
-    row.style.transform = '';
-    draftPins = Array.from(wrap.children).map(c=>c._pinRef);
-    renderPinList();
-    refreshMiniMapMarkers();
-  }
-  document.addEventListener('pointermove', onMove);
-  document.addEventListener('pointerup', onUp);
-  document.addEventListener('pointercancel', onUp);
+function toggleReorderMode(){
+  reorderMode = !reorderMode;
+  renderPinList();
 }
+
+/* 並べ替え専用モード：通常のスクロール操作と完全に分離するため、
+   このモード中は「番号・名前・↑↓」だけを表示し、他の操作（削除・コピー・改名など）は出さない */
+function renderReorderModeList(wrap){
+  const banner = document.createElement('div');
+  banner.style.cssText = 'background:var(--accent-dim); color:var(--accent); border-radius:10px; padding:10px 12px; font-size:13px; font-weight:700; margin-bottom:10px; text-align:center;';
+  banner.textContent = '並べ替えモード：↑↓で1つずつ移動できます';
+  wrap.appendChild(banner);
+
+  draftPins.forEach((p, i)=>{
+    const row = document.createElement('div');
+    row.className = 'pin-row';
+    row.style.cssText = 'flex-direction:row; align-items:center; gap:10px;';
+
+    const numEl = document.createElement('div');
+    numEl.className = 'pin-num';
+    numEl.textContent = i+1;
+
+    const nameEl = document.createElement('div');
+    nameEl.className = 'pname';
+    nameEl.style.textDecoration = 'none';
+    nameEl.style.cursor = 'default';
+    nameEl.textContent = p.name;
+
+    const actions = document.createElement('div');
+    actions.className = 'pin-actions';
+    const upBtn = mkMini('↑', ()=>{
+      if(i>0){ [draftPins[i-1],draftPins[i]]=[draftPins[i],draftPins[i-1]]; renderPinList(); refreshMiniMapMarkers(); }
+    });
+    if(i===0) upBtn.style.visibility = 'hidden';
+    const downBtn = mkMini('↓', ()=>{
+      if(i<draftPins.length-1){ [draftPins[i+1],draftPins[i]]=[draftPins[i],draftPins[i+1]]; renderPinList(); refreshMiniMapMarkers(); }
+    });
+    if(i===draftPins.length-1) downBtn.style.visibility = 'hidden';
+    actions.appendChild(upBtn);
+    actions.appendChild(downBtn);
+
+    row.appendChild(numEl);
+    row.appendChild(nameEl);
+    row.appendChild(actions);
+    wrap.appendChild(row);
+  });
+
+  const doneBtn = document.createElement('button');
+  doneBtn.className = 'btn block';
+  doneBtn.style.marginTop = '10px';
+  doneBtn.textContent = '完了';
+  doneBtn.onclick = toggleReorderMode;
+  wrap.appendChild(doneBtn);
+}
+
 function mkMini(label, onClick){
   const b = document.createElement('div');
   b.className = 'mini';
