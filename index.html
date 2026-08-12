@@ -949,11 +949,19 @@ function extractLatLngFromUrl(url){
   if(!url) return null;
   let m = url.match(/query=(-?\d+\.\d+),(-?\d+\.\d+)/);
   if(m) return {lat:parseFloat(m[1]), lng:parseFloat(m[2])};
+  m = url.match(/\/search\/(-?\d+\.\d+),(-?\d+\.\d+)/);
+  if(m) return {lat:parseFloat(m[1]), lng:parseFloat(m[2])};
   m = url.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
   if(m) return {lat:parseFloat(m[1]), lng:parseFloat(m[2])};
   m = url.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
   if(m) return {lat:parseFloat(m[1]), lng:parseFloat(m[2])};
   return null;
+}
+function extractPlaceNameFromUrl(url){
+  if(!url) return null;
+  const m = url.match(/\/maps\/place\/([^\/]+)\//);
+  if(!m) return null;
+  try{ return decodeURIComponent(m[1].replace(/\+/g, ' ')); }catch(e){ return null; }
 }
 function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
 async function readFileSmart(file){
@@ -970,15 +978,6 @@ async function readFileSmart(file){
     }
   }
 }
-async function geocodeByName(name){
-  try{
-    const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(name)}&accept-language=ja&countrycodes=jp&limit=1`;
-    const res = await fetch(url);
-    const data = await res.json();
-    if(data && data.length > 0) return {lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon)};
-  }catch(e){}
-  return null;
-}
 async function handleCsvFile(evt){
   const file = evt.target.files[0];
   const statusEl = document.getElementById('csvStatus');
@@ -988,29 +987,41 @@ async function handleCsvFile(evt){
   try{ text = await readFileSmart(file); }
   catch(e){ statusEl.textContent = 'ファイルの読み込みに失敗しました。'; return; }
   try{
+    text = text.replace(/^\uFEFF/, ''); // 先頭のBOMを除去（あれば）
     const lines = text.split(/\r?\n/).filter(l=>l.trim().length>0);
     if(lines.length < 2){ statusEl.textContent = 'データが見つかりませんでした。'; return; }
-    const header = parseCsvLine(lines[0]).map(h=>h.trim().toLowerCase());
-    const titleIdx = header.findIndex(h=>h==='title');
-    const urlIdx = header.findIndex(h=>h==='url' || h==='comment' || h.includes('url'));
+    const rawHeader = parseCsvLine(lines[0]).map(h=>h.trim());
+    const header = rawHeader.map(h=>h.toLowerCase());
+    const titleCandidates = ['title','タイトル','name','名前','場所名','placename'];
+    const urlCandidates = ['url','コメント','リンク','link'];
+    let titleIdx = header.findIndex(h=> titleCandidates.includes(h));
+    if(titleIdx < 0) titleIdx = 0; // 見つからなければ先頭列をタイトルとみなす
+    let urlIdx = header.findIndex(h=> urlCandidates.includes(h) || h.includes('url'));
     const rows = [];
     for(let i=1;i<lines.length;i++){
       const cols = parseCsvLine(lines[i]);
       const title = ((titleIdx>=0 ? cols[titleIdx] : cols[0]) || '(名称不明)').trim();
-      const urlCol = urlIdx>=0 ? cols[urlIdx] : cols.find(c=>c.includes('http'));
-      rows.push({title, urlCol});
+      const urlCol = urlIdx>=0 ? cols[urlIdx] : cols.find(c=>c && c.includes('http'));
+      if(!title && !urlCol) continue; // 完全な空行はスキップ
+      rows.push({title: title || '(名称不明)', urlCol});
     }
-    let added = 0, skipped = 0, geocoded = 0;
+    let added = 0, skipped = 0, approx = 0;
     for(let i=0;i<rows.length;i++){
       const row = rows[i];
       statusEl.textContent = `処理中…（${i+1}/${rows.length}件）`;
       let coords = extractLatLngFromUrl(row.urlCol);
-      if(!coords){
+      if(!coords && row.title && row.title !== '(名称不明)'){
         // URLに座標が含まれない場合（Googleテイクアウトの「保存済み」CSVでよくある）、
-        // 場所の名前で検索して座標を補う。Nominatimの利用ポリシーを守るため1件ずつ間隔を空ける。
-        coords = await geocodeByName(row.title);
-        if(coords) geocoded++;
-        await sleep(1100);
+        // 住所検索タブと同じ「段階的に短くして再検索」で近いエリアを探す
+        const area = await findNearbyArea(row.title);
+        if(area){ coords = {lat:area.lat, lng:area.lng}; approx++; }
+      }
+      if(!coords){
+        const urlName = extractPlaceNameFromUrl(row.urlCol);
+        if(urlName && urlName !== row.title){
+          const area = await findNearbyArea(urlName);
+          if(area){ coords = {lat:area.lat, lng:area.lng}; approx++; }
+        }
       }
       if(!coords){ skipped++; continue; }
       draftPins.push({name: row.title, lat: coords.lat, lng: coords.lng, type:'destination'});
@@ -1019,7 +1030,7 @@ async function handleCsvFile(evt){
     renderPinList();
     refreshMiniMapMarkers();
     let msg = `${added}件のピンを追加しました`;
-    if(geocoded > 0) msg += `（うち${geocoded}件は名前から住所検索して座標を補いました）`;
+    if(approx > 0) msg += `（うち${approx}件は名前から検索したおおよその位置です。長押しで位置を確認・修正してください）`;
     if(skipped > 0) msg += `（${skipped}件は座標を特定できずスキップ）`;
     statusEl.textContent = msg;
   }catch(e){
@@ -1249,6 +1260,8 @@ async function findNearbyArea(originalQuery){
         return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon), label: data[0].display_name.split(',').slice(0,2).join(',') };
       }
     }catch(e){ /* このattemptは無視して次へ */ }
+    // Nominatimの利用ポリシー（1リクエスト/秒）を守るための間隔
+    await sleep(1100);
     // 末尾の番地・丁目・ハイフンなどを削って、より広いエリアで再検索
     const shorter = q.replace(/[0-9０-９〇一二三四五六七八九十\-−ー番号丁目]+$/u, '').trim();
     q = (shorter && shorter.length < q.length) ? shorter : q.slice(0, -2).trim();
