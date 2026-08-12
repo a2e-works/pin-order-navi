@@ -993,17 +993,21 @@ async function handleCsvFile(evt){
     const rawHeader = parseCsvLine(lines[0]).map(h=>h.trim());
     const header = rawHeader.map(h=>h.toLowerCase());
     const titleCandidates = ['title','タイトル','name','名前','場所名','placename'];
+    const memoCandidates = ['メモ','memo','note','ノート'];
     const urlCandidates = ['url','コメント','リンク','link'];
     let titleIdx = header.findIndex(h=> titleCandidates.includes(h));
     if(titleIdx < 0) titleIdx = 0; // 見つからなければ先頭列をタイトルとみなす
+    let memoIdx = header.findIndex(h=> memoCandidates.includes(h));
     let urlIdx = header.findIndex(h=> urlCandidates.includes(h) || h.includes('url'));
     const rows = [];
     for(let i=1;i<lines.length;i++){
       const cols = parseCsvLine(lines[i]);
-      const title = ((titleIdx>=0 ? cols[titleIdx] : cols[0]) || '(名称不明)').trim();
+      const title = ((titleIdx>=0 ? cols[titleIdx] : cols[0]) || '').trim();
+      const memo = (memoIdx>=0 ? (cols[memoIdx]||'') : '').trim();
+      const displayName = memo || title || '(名称不明)';
       const urlCol = urlIdx>=0 ? cols[urlIdx] : cols.find(c=>c && c.includes('http'));
-      if(!title && !urlCol) continue; // 完全な空行はスキップ
-      rows.push({title: title || '(名称不明)', urlCol});
+      if(!title && !memo && !urlCol) continue; // 完全な空行はスキップ
+      rows.push({title: title || displayName, displayName, urlCol});
     }
     let added = 0, skipped = 0, approx = 0;
     for(let i=0;i<rows.length;i++){
@@ -1024,7 +1028,7 @@ async function handleCsvFile(evt){
         }
       }
       if(!coords){ skipped++; console.warn('CSV import: geocode failed for', row.title); continue; }
-      draftPins.push({name: row.title, lat: coords.lat, lng: coords.lng, type:'destination'});
+      draftPins.push({name: row.displayName, lat: coords.lat, lng: coords.lng, type:'destination'});
       added++;
     }
     renderPinList();
