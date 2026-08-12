@@ -1023,7 +1023,7 @@ async function handleCsvFile(evt){
           if(area){ coords = {lat:area.lat, lng:area.lng}; approx++; }
         }
       }
-      if(!coords){ skipped++; continue; }
+      if(!coords){ skipped++; console.warn('CSV import: geocode failed for', row.title); continue; }
       draftPins.push({name: row.title, lat: coords.lat, lng: coords.lng, type:'destination'});
       added++;
     }
@@ -1250,7 +1250,8 @@ async function doGeoSearch(){
 /* 完全一致で見つからない場合、末尾（番地・号・丁目など）を少しずつ削って
    ヒットする範囲までクエリを広げ、そのエリアの中心地図を返す */
 async function findNearbyArea(originalQuery){
-  let q = originalQuery;
+  // 先頭の郵便番号（例:「〒132-0001 」）は検索エンジンの解析を妨げることがあるため先に除去する
+  let q = originalQuery.replace(/^〒?\s*\d{3}-\d{4}\s*/, '').trim() || originalQuery;
   for(let attempt=0; attempt<6 && q.length>=3; attempt++){
     try{
       const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&accept-language=ja&countrycodes=jp&limit=1`;
