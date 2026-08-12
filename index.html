@@ -314,7 +314,7 @@
 
           <div id="csvTab" style="margin-top:10px; display:none;">
             <div class="import-help">
-              Googleテイクアウト（<a href="https://takeout.google.com" target="_blank" rel="noopener">takeout.google.com</a>）で「保存済み地点（Maps）」を選んでエクスポートし、対象リストのCSVファイルをここで読み込みます。追加されたピンはすべて「行きたい場所」として追加されます（後で経由点に切り替え可能）。
+              Googleテイクアウト（<a href="https://takeout.google.com" target="_blank" rel="noopener">takeout.google.com</a>）で「すべて選択を解除」→<b>「保存済み」（Saved）</b>にチェックを入れてエクスポートし（「Maps」ではありません）、リストごとのCSVファイルをここで読み込みます。座標がCSVに含まれていない場合は名前から自動で住所検索して補うため、件数が多いと時間がかかることがあります。追加されたピンはすべて「行きたい場所」として追加されます（後で経由点に切り替え可能）。
             </div>
             <input type="file" id="csvFileInput" accept=".csv" onchange="handleCsvFile(event)">
             <div id="csvStatus" class="sub" style="margin-top:8px;"></div>
@@ -955,38 +955,62 @@ function extractLatLngFromUrl(url){
   if(m) return {lat:parseFloat(m[1]), lng:parseFloat(m[2])};
   return null;
 }
-function handleCsvFile(evt){
+function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
+async function geocodeByName(name){
+  try{
+    const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(name)}&accept-language=ja&countrycodes=jp&limit=1`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if(data && data.length > 0) return {lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon)};
+  }catch(e){}
+  return null;
+}
+async function handleCsvFile(evt){
   const file = evt.target.files[0];
   const statusEl = document.getElementById('csvStatus');
   if(!file) return;
   statusEl.textContent = '読み込み中…';
-  const reader = new FileReader();
-  reader.onload = ()=>{
-    try{
-      const text = reader.result;
-      const lines = text.split(/\r?\n/).filter(l=>l.trim().length>0);
-      if(lines.length < 2){ statusEl.textContent = 'データが見つかりませんでした。'; return; }
-      const header = parseCsvLine(lines[0]).map(h=>h.trim().toLowerCase());
-      const titleIdx = header.findIndex(h=>h==='title');
-      const urlIdx = header.findIndex(h=>h==='url' || h==='comment' || h.includes('url'));
-      let added = 0, skipped = 0;
-      for(let i=1;i<lines.length;i++){
-        const cols = parseCsvLine(lines[i]);
-        const title = (titleIdx>=0 ? cols[titleIdx] : cols[0]) || '(名称不明)';
-        const urlCol = urlIdx>=0 ? cols[urlIdx] : cols.find(c=>c.includes('http'));
-        const coords = extractLatLngFromUrl(urlCol);
-        if(!coords){ skipped++; continue; }
-        draftPins.push({name: title.trim(), lat: coords.lat, lng: coords.lng, type:'destination'});
-        added++;
-      }
-      renderPinList();
-      refreshMiniMapMarkers();
-      statusEl.textContent = `${added}件のピンを追加しました${skipped>0 ? '（座標を特定できず'+skipped+'件をスキップ）' : ''}`;
-    }catch(e){
-      statusEl.textContent = 'CSVの読み込みに失敗しました。Googleテイクアウトから書き出したそのままのCSVをお使いください。';
+  let text;
+  try{ text = await file.text(); }
+  catch(e){ statusEl.textContent = 'ファイルの読み込みに失敗しました。'; return; }
+  try{
+    const lines = text.split(/\r?\n/).filter(l=>l.trim().length>0);
+    if(lines.length < 2){ statusEl.textContent = 'データが見つかりませんでした。'; return; }
+    const header = parseCsvLine(lines[0]).map(h=>h.trim().toLowerCase());
+    const titleIdx = header.findIndex(h=>h==='title');
+    const urlIdx = header.findIndex(h=>h==='url' || h==='comment' || h.includes('url'));
+    const rows = [];
+    for(let i=1;i<lines.length;i++){
+      const cols = parseCsvLine(lines[i]);
+      const title = ((titleIdx>=0 ? cols[titleIdx] : cols[0]) || '(名称不明)').trim();
+      const urlCol = urlIdx>=0 ? cols[urlIdx] : cols.find(c=>c.includes('http'));
+      rows.push({title, urlCol});
     }
-  };
-  reader.readAsText(file, 'UTF-8');
+    let added = 0, skipped = 0, geocoded = 0;
+    for(let i=0;i<rows.length;i++){
+      const row = rows[i];
+      statusEl.textContent = `処理中…（${i+1}/${rows.length}件）`;
+      let coords = extractLatLngFromUrl(row.urlCol);
+      if(!coords){
+        // URLに座標が含まれない場合（Googleテイクアウトの「保存済み」CSVでよくある）、
+        // 場所の名前で検索して座標を補う。Nominatimの利用ポリシーを守るため1件ずつ間隔を空ける。
+        coords = await geocodeByName(row.title);
+        if(coords) geocoded++;
+        await sleep(1100);
+      }
+      if(!coords){ skipped++; continue; }
+      draftPins.push({name: row.title, lat: coords.lat, lng: coords.lng, type:'destination'});
+      added++;
+    }
+    renderPinList();
+    refreshMiniMapMarkers();
+    let msg = `${added}件のピンを追加しました`;
+    if(geocoded > 0) msg += `（うち${geocoded}件は名前から住所検索して座標を補いました）`;
+    if(skipped > 0) msg += `（${skipped}件は座標を特定できずスキップ）`;
+    statusEl.textContent = msg;
+  }catch(e){
+    statusEl.textContent = 'CSVの読み込みに失敗しました。Googleテイクアウトから書き出したそのままのCSVをお使いください。';
+  }
 }
 
 /* ===================== Google My Maps (Drive API) import ===================== */
