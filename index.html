@@ -859,8 +859,10 @@ function renderPinList(){
     actions.className = 'pin-actions';
     const posBtn = mkMini('📍', ()=> openPinPositionEditor(p));
     posBtn.title = '位置を修正';
-    const mapsBtn = mkMini('🧭', ()=> openSinglePinInGoogleMaps(p));
+    const mapsBtn = mkMini('G', ()=> openSinglePinInGoogleMaps(p));
     mapsBtn.title = 'このピンだけGoogle Mapsで開く';
+    mapsBtn.style.fontSize = '13px';
+    mapsBtn.style.fontWeight = '700';
     const yahooBtn = mkMini('Y!', ()=> openSinglePinInYahooCarNavi(p));
     yahooBtn.title = 'このピンだけYahoo!カーナビで開く';
     yahooBtn.style.fontSize = '11px';
