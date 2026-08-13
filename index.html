@@ -312,6 +312,11 @@
               <button class="btn secondary" id="mapEditDoneBtn" style="display:none; padding:8px 14px; font-size:12.5px;" onclick="exitPinPositionEditor()">完了</button>
             </div>
             <button class="btn secondary block" style="margin-bottom:8px; font-size:13px;" onclick="addPinAtCurrentLocation()">📍 現在地にピンを追加</button>
+            <div style="display:flex; gap:8px; margin-bottom:8px;">
+              <input type="text" id="pasteUrlInput" placeholder="Yahoo!地図やGoogle Mapsの共有リンクを貼り付け" style="flex:1;">
+              <button class="btn secondary" style="padding:0 16px; font-size:13px;" onclick="applyPastedLocationUrl()">適用</button>
+            </div>
+            <div class="sub" id="pasteUrlStatus" style="margin-bottom:8px;"></div>
             <div id="miniMap" style="display:block;"></div>
           </div>
 
@@ -778,7 +783,6 @@ function renderPinList(){
     };
     top.appendChild(numEl);
     top.appendChild(nameEl);
-    attachLongPressToRow(top, p);
 
     const bottom = document.createElement('div');
     bottom.className = 'pin-row-bottom';
@@ -791,11 +795,13 @@ function renderPinList(){
 
     const actions = document.createElement('div');
     actions.className = 'pin-actions';
+    const posBtn = mkMini('📍', ()=> openPinPositionEditor(p));
+    posBtn.title = '位置を修正';
     const mapsBtn = mkMini('🧭', ()=> openSinglePinInGoogleMaps(p));
     mapsBtn.title = 'このピンだけGoogle Mapsで開く';
     const copyBtn = mkMini('⧉', ()=>{ draftPins.splice(i+1, 0, {...p, name: p.name + 'のコピー'}); renderPinList(); refreshMiniMapMarkers(); });
     const delBtn = mkMini('×', ()=>{ draftPins.splice(i,1); renderPinList(); refreshMiniMapMarkers(); });
-    actions.appendChild(mapsBtn); actions.appendChild(copyBtn); actions.appendChild(delBtn);
+    actions.appendChild(posBtn); actions.appendChild(mapsBtn); actions.appendChild(copyBtn); actions.appendChild(delBtn);
     bottom.appendChild(actions);
 
     row.appendChild(top);
@@ -881,32 +887,7 @@ function switchAddTab(tab){
   if(tab==='gmaps') initGmapsTab();
 }
 
-/* ===================== 長押しでピンの位置を修正 ===================== */
-function attachLongPressToRow(top, p){
-  let timer = null, startX = 0, startY = 0, fired = false;
-  const THRESHOLD = 10, DURATION = 550;
-  top.addEventListener('contextmenu', (e)=> e.preventDefault());
-  top.addEventListener('pointerdown', (e)=>{
-    if(e.target.closest('.drag-handle')) return;
-    fired = false;
-    startX = e.clientX; startY = e.clientY;
-    timer = setTimeout(()=>{
-      fired = true;
-      if(navigator.vibrate) navigator.vibrate(15);
-      openPinPositionEditor(p);
-    }, DURATION);
-  });
-  const cancel = ()=>{ if(timer){ clearTimeout(timer); timer = null; } };
-  top.addEventListener('pointermove', (e)=>{
-    if(!timer) return;
-    if(Math.abs(e.clientX-startX) > THRESHOLD || Math.abs(e.clientY-startY) > THRESHOLD) cancel();
-  });
-  top.addEventListener('pointerup', cancel);
-  top.addEventListener('pointercancel', cancel);
-  top.addEventListener('click', (e)=>{
-    if(fired){ e.preventDefault(); e.stopPropagation(); fired = false; }
-  }, true);
-}
+/* ===================== ピンの位置を修正（📍ボタンから） ===================== */
 function openPinPositionEditor(p){
   mapEditTargetPin = p;
   switchAddTab('map');
@@ -962,6 +943,10 @@ function extractLatLngFromUrl(url){
   if(m) return {lat:parseFloat(m[1]), lng:parseFloat(m[2])};
   m = url.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
   if(m) return {lat:parseFloat(m[1]), lng:parseFloat(m[2])};
+  // 汎用パターン（Yahoo!地図など）: lat=...&lon=... または lat=...&lng=...（順不同）
+  const latM = url.match(/[?&]lat=(-?\d+\.\d+)/);
+  const lonM = url.match(/[?&]lon=(-?\d+\.\d+)/) || url.match(/[?&]lng=(-?\d+\.\d+)/);
+  if(latM && lonM) return {lat: parseFloat(latM[1]), lng: parseFloat(lonM[1])};
   return null;
 }
 function extractPlaceNameFromUrl(url){
@@ -1341,6 +1326,31 @@ async function addPinAtCurrentLocation(){
   refreshMiniMapMarkers();
   panMiniMapTo(lat, lng, 17);
   showToast('現在地にピンを追加しました');
+}
+async function applyPastedLocationUrl(){
+  const input = document.getElementById('pasteUrlInput');
+  const statusEl = document.getElementById('pasteUrlStatus');
+  const url = input.value.trim();
+  if(!url){ statusEl.textContent = 'URLを貼り付けてください'; return; }
+  const coords = extractLatLngFromUrl(url);
+  if(!coords){ statusEl.textContent = 'このURLから位置情報を読み取れませんでした。地図アプリの「共有」から取得したリンクをお使いください。'; return; }
+  if(mapEditTargetPin){
+    mapEditTargetPin.lat = coords.lat; mapEditTargetPin.lng = coords.lng;
+    renderPinList(); refreshMiniMapMarkers();
+    panMiniMapTo(coords.lat, coords.lng, 17);
+    statusEl.textContent = '位置を更新しました';
+    input.value = '';
+    return;
+  }
+  let name = extractPlaceNameFromUrl(url) || ('緯度' + coords.lat.toFixed(4) + ' 経度' + coords.lng.toFixed(4));
+  const custom = prompt('このピンの名前を入力してください', name);
+  if(custom === null) return;
+  draftPins.push({name: custom || name, lat: coords.lat, lng: coords.lng, type:'destination'});
+  renderPinList();
+  refreshMiniMapMarkers();
+  panMiniMapTo(coords.lat, coords.lng, 17);
+  statusEl.textContent = 'ピンを追加しました';
+  input.value = '';
 }
 async function saveRoute(){
   const name = document.getElementById('routeNameInput').value.trim();
