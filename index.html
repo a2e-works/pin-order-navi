@@ -1007,7 +1007,10 @@ function renderPinList(){
 
     const actions = document.createElement('div');
     actions.className = 'pin-actions';
-    const posBtn = mkMini('📍', ()=> openPinPositionEditor(p));
+    const posBtn = mkMini('📍', ()=>{
+      openPinPositionEditor(p);
+      openSinglePinInGoogleMaps(p);
+    });
     posBtn.title = '位置を修正';
     const mapsBtn = mkMini('G', ()=> openSinglePinInGoogleMaps(p));
     mapsBtn.title = 'このピンだけGoogle Mapsで開く';
