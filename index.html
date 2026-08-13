@@ -403,7 +403,8 @@
         <button class="btn secondary" onclick="skipToNextPin()">次のピンへ</button>
         <button class="btn secondary" onclick="recalcRoute()">再計算</button>
         <button class="btn secondary" onclick="shareRouteToGoogleMaps(navActiveRoute)">Google Mapsで開く</button>
-        <button class="btn danger" onclick="endNav()">終了</button>
+        <button class="btn secondary" onclick="shareRouteToYahooCarNavi(navActiveRoute)">Yahoo!カーナビで開く</button>
+        <button class="btn danger" style="grid-column:1 / -1;" onclick="endNav()">終了</button>
       </div>
     </div>
 
@@ -430,8 +431,8 @@
   <!-- ============ Google Maps 分割起動モーダル ============ -->
   <div class="center-msg" id="gmapsSegModal" style="display:none; z-index:1000;">
     <div style="background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:20px; max-width:340px; width:100%; text-align:left;">
-      <div style="font-size:16px; font-weight:700; margin-bottom:6px;">Google Mapsは1回で最大9地点までです</div>
-      <div class="sub" style="margin-bottom:14px; line-height:1.7;">区間ごとに分けました。<b>上から順番に</b>開いてください（前の区間のゴールが次の区間のスタートになるようにつないであります）。</div>
+      <div style="font-size:16px; font-weight:700; margin-bottom:6px;" id="segModalTitle">Google Mapsは1回で最大9地点までです</div>
+      <div class="sub" style="margin-bottom:14px; line-height:1.7;" id="segModalDesc">区間ごとに分けました。<b>上から順番に</b>開いてください（前の区間のゴールが次の区間のスタートになるようにつないであります）。</div>
       <div id="gmapsSegList" style="display:flex; flex-direction:column; gap:8px; max-height:50vh; overflow-y:auto;"></div>
       <button class="btn secondary block" style="margin-top:14px;" onclick="closeGmapsSegModal()">閉じる</button>
     </div>
@@ -621,6 +622,14 @@ function renderRouteList(){
     shareBtn.textContent = '↗';
     shareBtn.onclick = ()=> shareRouteToGoogleMaps(r);
     card.querySelector('.actions').prepend(shareBtn);
+    const yahooShareBtn = document.createElement('div');
+    yahooShareBtn.className = 'iconbtn';
+    yahooShareBtn.title = 'Yahoo!カーナビで開く';
+    yahooShareBtn.style.fontSize = '11px';
+    yahooShareBtn.style.fontWeight = '700';
+    yahooShareBtn.textContent = 'Y!';
+    yahooShareBtn.onclick = ()=> shareRouteToYahooCarNavi(r);
+    card.querySelector('.actions').prepend(yahooShareBtn);
     const startBtn = document.createElement('button');
     startBtn.className = 'btn';
     startBtn.style.padding = '10px 14px';
@@ -705,9 +714,12 @@ function shareRouteToGoogleMaps(route){
     segOrigin = {lat: last.lat, lng: last.lng};
     idx += chunk.length;
   }
-  openGmapsSegModal(segments);
+  openSegmentModal(segments, 'Google Mapsは1回で最大9地点までです',
+    '区間ごとに分けました。<b>上から順番に</b>開いてください（前の区間のゴールが次の区間のスタートになるようにつないであります）。');
 }
-function openGmapsSegModal(segments){
+function openSegmentModal(segments, titleText, descHtml){
+  document.getElementById('segModalTitle').textContent = titleText;
+  document.getElementById('segModalDesc').innerHTML = descHtml;
   const list = document.getElementById('gmapsSegList');
   list.innerHTML = '';
   segments.forEach((seg, i)=>{
@@ -716,13 +728,63 @@ function openGmapsSegModal(segments){
     btn.style.textAlign = 'left';
     btn.style.fontSize = '13px';
     btn.textContent = `区間${i+1}：${seg.label}`;
-    btn.onclick = ()=> window.open(seg.url, '_blank');
+    btn.onclick = ()=> openExternalUrl(seg.url);
     list.appendChild(btn);
   });
   document.getElementById('gmapsSegModal').style.display = 'flex';
 }
 function closeGmapsSegModal(){
   document.getElementById('gmapsSegModal').style.display = 'none';
+}
+function openExternalUrl(url){
+  // yjcarnavi:// のようなカスタムURLスキームは window.open だとブロックされることがあるため location.href を使う
+  if(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(url) && !url.startsWith('http')){
+    window.location.href = url;
+  }else{
+    window.open(url, '_blank');
+  }
+}
+
+/* ===================== Yahoo!カーナビへの引き渡し ===================== */
+function buildYahooCarNaviUrl(pins){
+  if(!pins || pins.length === 0) return null;
+  if(pins.length === 1){
+    const p = pins[0];
+    return `yjcarnavi://navi/select?lat=${p.lat}&lon=${p.lng}&name=${encodeURIComponent(p.name)}`;
+  }
+  let url = 'yjcarnavi://navi/select?point=current';
+  pins.forEach(p=>{ url += `&point=${p.lat},${p.lng},`; });
+  return url;
+}
+function openSinglePinInYahooCarNavi(p){
+  const url = buildYahooCarNaviUrl([p]);
+  if(!url) return;
+  openExternalUrl(url);
+  showToast('Yahoo!カーナビを起動します（未インストールの場合は何も起きません）');
+}
+function shareRouteToYahooCarNavi(route){
+  if(!route || !route.pins || route.pins.length === 0){ showToast('ピンがありません'); return; }
+  const CAP = 4; // Yahoo!カーナビは現在地＋最大4地点（経由3＋目的地1）まで
+  if(route.pins.length <= CAP){
+    const url = buildYahooCarNaviUrl(route.pins);
+    openExternalUrl(url);
+    showToast('Yahoo!カーナビを起動します（未インストールの場合は何も起きません）');
+    return;
+  }
+  const segments = [];
+  let idx = 0;
+  while(idx < route.pins.length){
+    const chunk = route.pins.slice(idx, idx + CAP);
+    const url = buildYahooCarNaviUrl(chunk);
+    const last = chunk[chunk.length - 1];
+    segments.push({
+      url,
+      label: `${idx+1}〜${idx+chunk.length}件目（${chunk[0].name.split(',')[0]} 〜 ${last.name.split(',')[0]}）`
+    });
+    idx += chunk.length;
+  }
+  openSegmentModal(segments, 'Yahoo!カーナビは1回で最大4地点までです',
+    '区間ごとに分けました。<b>上から順番に</b>開いてください。次の区間は毎回「現在地」からのスタートになります。');
 }
 
 /* ===================== EDITOR ===================== */
@@ -799,9 +861,13 @@ function renderPinList(){
     posBtn.title = '位置を修正';
     const mapsBtn = mkMini('🧭', ()=> openSinglePinInGoogleMaps(p));
     mapsBtn.title = 'このピンだけGoogle Mapsで開く';
+    const yahooBtn = mkMini('Y!', ()=> openSinglePinInYahooCarNavi(p));
+    yahooBtn.title = 'このピンだけYahoo!カーナビで開く';
+    yahooBtn.style.fontSize = '11px';
+    yahooBtn.style.fontWeight = '700';
     const copyBtn = mkMini('⧉', ()=>{ draftPins.splice(i+1, 0, {...p, name: p.name + 'のコピー'}); renderPinList(); refreshMiniMapMarkers(); });
     const delBtn = mkMini('×', ()=>{ draftPins.splice(i,1); renderPinList(); refreshMiniMapMarkers(); });
-    actions.appendChild(posBtn); actions.appendChild(mapsBtn); actions.appendChild(copyBtn); actions.appendChild(delBtn);
+    actions.appendChild(posBtn); actions.appendChild(mapsBtn); actions.appendChild(yahooBtn); actions.appendChild(copyBtn); actions.appendChild(delBtn);
     bottom.appendChild(actions);
 
     row.appendChild(top);
